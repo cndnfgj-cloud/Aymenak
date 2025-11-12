@@ -108,17 +108,17 @@ def webhook():
 
 # ===== Cleaning & extraction =====
 BLOCK_PATTERNS = [
-    r'(?i)(answer|date|dev|time)\s*[:：]\s*.*',  # labeled lines
-    r'(?i)t[_\W-]*r[_\W-]*x[_\W-]*a[_\W-]*i', # T_R_X_AI variants
-    r'(?i)dont\s*forget.*',                     # "Don't forget to support the channel"
+    r'(?i)(answer|date|dev|time)\s*[:：]\s*.*',   # labeled lines
+    r'(?i)t[_\W-]*r[_\W-]*x[_\W-]*a[_\W-]*i',    # T_R_X_AI variants
+    r'(?i)dont\s*forget.*',                      # "Don't forget to support the channel"
 ]
 
 REMOVE_INLINE = [
-    (r'\d{4}-\d{2}-\d{2}.*', ''),              # ISO date + trailing
-    (r'\b\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|am|pm)?\b', ''),  # times
-    (r'http\S+|www\S+|@\S+', ''),             # links and @handles
-    (r'["\' + "`" + r']', ''),                   # quotes/backticks
-    (r'[:{}]', ''),                               # colons/braces
+    (r'\d{4}-\d{2}-\d{2}.*', ''),                                  # ISO date + trailing
+    (r'\b\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|am|pm)?\b', ''),          # times
+    (r'http\S+|www\S+|@\S+', ''),                                  # links and @handles
+    (r'["\'`]', ''),                                               # quotes/backticks  ← تم إصلاح الـregex هنا
+    (r'[:{}]', ''),                                                # colons/braces
 ]
 
 def extract_arabic_sentence(text: str) -> str:
