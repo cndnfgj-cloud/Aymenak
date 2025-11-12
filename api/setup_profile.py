@@ -19,22 +19,13 @@ def setup_profile():
     payload = {
         "greeting": [{
             "locale": "default",
-            "text": "مرحبًا! اكتب أي سؤال أو استخدم الأزرار بالأسفل."
+            "text": "أهلًا! اكتب أي سؤال — رد فوري وقصير."
         }],
         "get_started": {"payload": "GET_STARTED"},
-        "persistent_menu": [{
-            "locale": "default",
-            "composer_input_disabled": False,
-            "call_to_actions": [
-                {"type": "postback", "title": "🤖 معلومات الذكاء", "payload": "AI_INFO"},
-                {"type": "postback", "title": "🧭 قائمة", "payload": "SHOW_MENU"},
-                {"type": "web_url", "title": "👨‍💻 حساب المطوّر", "url": DEV_PROFILE_URL}
-            ]
-        }],
+        # No persistent_menu per request
         "ice_breakers": [
-            {"question": "ما الذي يمكنك فعله؟", "payload": "AI_INFO"},
-            {"question": "أظهر القائمة", "payload": "SHOW_MENU"},
-            {"question": "من مطوّرك؟", "payload": "DEV_INFO"}
+            {"question": "من مطوّرك؟", "payload": "DEV_INFO"},
+            {"question": "أرني زر المشاركة", "payload": "SHARE_BOT"}
         ]
     }
     return jsonify(call_profile(payload))
