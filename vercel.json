@@ -1,8 +1,19 @@
 {
   "version": 2,
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python"
+    }
+  ],
   "routes": [
-    { "src": "/api/webhook", "dest": "/api/index.py" },
-    { "src": "/api/setup/(.*)", "dest": "/api/setup_profile.py" },
-    { "src": "/api/healthz", "dest": "/api/index.py" }
+    {
+      "src": "/api/(.*)",
+      "dest": "api/index.py"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "api/index.py"
+    }
   ]
 }
