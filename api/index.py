@@ -8,7 +8,7 @@ app = Flask(__name__)
 # ===== الإعداد =====
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "boykta 2023")
-GPT_API = "https://app.claila.com/api/v2/unichat2"
+GPT_API = "https://vetrex.x10.mx/api/gpt4.php"
 DEV_PROFILE_URL = os.getenv("DEV_PROFILE_URL", "https://www.facebook.com/aymen.bourai.2025")
 
 GRAPH_URL = "https://graph.facebook.com/v17.0/me/messages"
