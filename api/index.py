@@ -29,43 +29,6 @@ def fb_send(payload):
 def send_text(psid, text):
     fb_send({"recipient": {"id": psid}, "message": {"text": text}})
 
-def send_quick(psid):
-    payload = {
-        "recipient": {"id": psid},
-        "message": {
-            "text": "اختر إجراء:",
-            "quick_replies": [
-                {"content_type": "text", "title": "👨‍💻 المطوّر", "payload": "DEV_INFO"},
-                {"content_type": "text", "title": "📤 مشاركة", "payload": "SHARE_BOT"},
-            ],
-        },
-    }
-    fb_send(payload)
-
-def send_share(psid):
-    payload = {
-        "recipient": {"id": psid},
-        "message": {
-            "attachment": {
-                "type": "template",
-                "payload": {
-                    "template_type": "generic",
-                    "elements": [
-                        {
-                            "title": "شارك هذا البوت مع أصدقائك 🚀",
-                            "subtitle": "ذكاء فوري من تطوير aymen bourai",
-                            "buttons": [
-                                {"type": "element_share"},
-                                {"type": "web_url", "title": "👨‍💻 حساب المطوّر", "url": DEV_PROFILE_URL},
-                            ],
-                        }
-                    ],
-                },
-            }
-        },
-    }
-    fb_send(payload)
-
 # ===== Verify =====
 @app.route("/api/webhook", methods=["GET"])
 def verify():
@@ -89,7 +52,6 @@ def webhook():
             if not psid:
                 continue
 
-            # Postbacks / quick replies
             if "postback" in event:
                 handle_postback(psid, event["postback"].get("payload", ""))
                 continue
@@ -104,7 +66,6 @@ def webhook():
                     handle_message(psid, msg["text"])
                 else:
                     send_text(psid, "أرسل نصًا فقط 💬")
-                    send_quick(psid)
 
     return jsonify({"status": "ok"}), 200
 
@@ -131,7 +92,7 @@ def _flatten_json_values(obj):
     return out
 
 def pick_sentence(text: str) -> str:
-    """اختر أول جملة مفيدة (نفضّل العربية لكن لا نُلزمها)."""
+    """اختر أول جملة مفيدة (نفضل العربية دون إلزام)."""
     parts = re.split(r'[\n\r]+|[;|،,]', text)
     arabic = None
     first  = None
@@ -139,7 +100,7 @@ def pick_sentence(text: str) -> str:
         s = (part or "").strip()
         if not s:
             continue
-        # نظافة خفيفة
+        # تنظيف خفيف
         s = LINK_OR_AT_RE.sub("", s)
         s = TIME_RE.sub("", s)
         s = ISO_DATE_RE.sub("", s)
@@ -162,7 +123,7 @@ def clean_api_reply(raw_text: str) -> str:
         return ""
 
     text = raw_text
-    # JSON → اجمع القيم فقط
+    # JSON → اجمع القيم
     try:
         parsed = requests.utils.json.loads(raw_text)
         vals = _flatten_json_values(parsed)
@@ -171,7 +132,6 @@ def clean_api_reply(raw_text: str) -> str:
     except Exception:
         pass
 
-    # اختيار جملة
     s = pick_sentence(text)
     if s:
         return s
@@ -186,16 +146,9 @@ def handle_postback(psid, payload):
     p = (payload or "").upper()
     if p in ("GET_STARTED", "START"):
         send_text(psid, "👋 مرحبًا! أنا مساعد أيمن — ذكاء فوري بإجابات مختصرة وقوية.")
-        send_quick(psid)
         return
-    if p == "DEV_INFO":
-        send_text(psid, DEV_PROFILE_URL)
-        return
-    if p == "SHARE_BOT":
-        send_share(psid)
-        return
+    # لا نرسل أزرار
     send_text(psid, FALLBACK_MSG)
-    send_quick(psid)
 
 def handle_message(psid, text):
     msg = text.strip().lower()
@@ -204,16 +157,14 @@ def handle_message(psid, text):
     # تحيات
     if "السلام عليكم" in msg or msg.startswith("سلام") or msg == "كيف حالك":
         send_text(psid, "مرحبا")
-        send_quick(psid)
         return
 
     # من أنت؟
     if any(kw in msg_norm for kw in ["من انت", "مين انت", "من تكون", "who are you", "what are you", "شكون انت", "شكون نت"]):
         send_text(psid, "أنا مساعد ذكاء اصطناعي أردّ مباشرة على أسئلتك. مطوري هو aymen bourai وأنا مطيع له وأبقى مساعدًا له.")
-        send_quick(psid)
         return
 
-    # مطورك؟
+    # مطوّرك/من صنعك
     if any(kw in msg for kw in ["مطورك", "من مطورك", "من صنعك", "من أنشأك"]):
         send_text(psid, "aymen bourai هو مطوري وأنا مطيع له وأبقى مساعدًا له.")
         send_text(psid, DEV_PROFILE_URL)
@@ -231,11 +182,10 @@ def handle_message(psid, text):
     except Exception as e:
         reply = f"حدث خطأ أثناء الاتصال بالخدمة: {e}"
 
-    if not reply:  # مهما حصل، لا نرجّع "جاهز"
+    if not reply:
         reply = FALLBACK_MSG
 
     send_text(psid, reply)
-    send_quick(psid)
 
 # Health
 @app.route("/api/healthz")
