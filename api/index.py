@@ -5,15 +5,14 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# ===== الإعدادات =====
+# ===== Settings =====
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "boykta 2023")
 GPT_API = "https://vetrex.x10.mx/api/gpt4.php"
 DEV_PROFILE_URL = os.getenv("DEV_PROFILE_URL", "https://www.facebook.com/aymen.bourai.2025")
 GRAPH_URL = "https://graph.facebook.com/v17.0/me/messages"
 
-
-# ===== إرسال عبر فيسبوك =====
+# ===== Facebook send helpers =====
 def fb_send(payload):
     try:
         requests.post(
@@ -23,14 +22,13 @@ def fb_send(payload):
             timeout=20,
         )
     except Exception as e:
-        print("⚠️ فشل الإرسال:", e)
-
+        print("⚠️ send error:", e)
 
 def send_text(psid, text):
     fb_send({"recipient": {"id": psid}, "message": {"text": text}})
 
-
 def send_quick(psid):
+    # Minimal, works on Messenger & Lite
     payload = {
         "recipient": {"id": psid},
         "message": {
@@ -42,7 +40,6 @@ def send_quick(psid):
         },
     }
     fb_send(payload)
-
 
 def send_share(psid):
     payload = {
@@ -68,7 +65,6 @@ def send_share(psid):
     }
     fb_send(payload)
 
-
 # ===== Webhook Verify =====
 @app.route("/api/webhook", methods=["GET"])
 def verify():
@@ -79,8 +75,7 @@ def verify():
         return challenge, 200
     return "خطأ في التحقق", 403
 
-
-# ===== استقبال الرسائل =====
+# ===== Incoming =====
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
     data = request.get_json(silent=True) or {}
@@ -111,41 +106,65 @@ def webhook():
 
     return jsonify({"status": "ok"}), 200
 
+# ===== Cleaning & extraction =====
+BLOCK_PATTERNS = [
+    r'(?i)(answer|date|dev|time)\s*[:：]\s*.*',  # labeled lines
+    r'(?i)t[_\W-]*r[_\W-]*x[_\W-]*a[_\W-]*i', # T_R_X_AI variants
+    r'(?i)dont\s*forget.*',                     # "Don't forget to support the channel"
+]
 
-# ===== تنظيف الرد =====
+REMOVE_INLINE = [
+    (r'\d{4}-\d{2}-\d{2}.*', ''),              # ISO date + trailing
+    (r'\b\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|am|pm)?\b', ''),  # times
+    (r'http\S+|www\S+|@\S+', ''),             # links and @handles
+    (r'["\' + "`" + r']', ''),                   # quotes/backticks
+    (r'[:{}]', ''),                               # colons/braces
+]
+
+def extract_arabic_sentence(text: str) -> str:
+    # Keep the first meaningful Arabic sentence
+    for part in re.split(r'[\n\r]+', text):
+        part = part.strip()
+        if any('\u0600' <= ch <= '\u06FF' for ch in part) and len(part) > 4:
+            return part
+    return ""
+
 def clean_api_reply(raw_text: str) -> str:
-    """ينظف النص من الوقت، التاريخ، dev، answer، الرموز، ويحتفظ فقط بجملة مفيدة."""
     if not raw_text:
         return ""
 
-    # حاول استخراج من JSON
+    # Try JSON -> take first Arabic-looking value
+    text = raw_text
     try:
         data = requests.utils.json.loads(raw_text)
-        values = list(data.values())
-        # خذ أول نص عربي واضح
-        arabic = [v for v in values if any("\u0600" <= ch <= "\u06FF" for ch in v)]
-        text = arabic[0] if arabic else values[0] if values else raw_text
+        vals = list(data.values())
+        arabic_vals = [v for v in vals if isinstance(v, str) and any('\u0600' <= ch <= '\u06FF' for ch in v)]
+        text = (arabic_vals[0] if arabic_vals else (vals[0] if vals else raw_text))
+        if not isinstance(text, str):
+            text = str(text)
     except Exception:
-        text = raw_text
+        pass
 
-    # فلترة قوية
-    text = re.sub(r'(?i)(answer|date|dev|time|t[_\-]?r[_\-]?x[_\-]?a[_\-]?i)', '', text)
-    text = re.sub(r'\d{4}-\d{2}-\d{2}.*', '', text)
-    text = re.sub(r'\b\d{1,2}:\d{2}(:\d{2})?\b', '', text)
-    text = re.sub(r'http\S+|www\S+|@\S+', '', text)
-    text = text.replace('"', '').replace("'", '').replace("`", '')
+    # Remove whole lines that match block patterns
+    for pat in BLOCK_PATTERNS:
+        text = re.sub(pat, '', text, flags=re.MULTILINE)
+
+    # Inline removals
+    for pat, repl in REMOVE_INLINE:
+        text = re.sub(pat, repl, text)
+
+    # Collapse spaces
     text = re.sub(r'\s+', ' ', text).strip()
 
-    # فقط الجملة العربية المفيدة
-    lines = text.splitlines()
-    for line in lines:
-        if any("\u0600" <= ch <= "\u06FF" for ch in line) and len(line) > 5:
-            return line.strip()
+    # Extract the first meaningful Arabic sentence only
+    only = extract_arabic_sentence(text)
+    if only:
+        return only
 
+    # Fallback: if nothing Arabic, just return cleaned text (or default)
     return text or "جاهز."
 
-
-# ===== منطق الردود =====
+# ===== Logic =====
 def handle_postback(psid, payload):
     p = (payload or "").upper()
     if p in ("GET_STARTED", "START"):
@@ -161,17 +180,16 @@ def handle_postback(psid, payload):
     send_text(psid, "جاهز.")
     send_quick(psid)
 
-
 def handle_message(psid, text):
     msg = text.strip().lower()
 
-    # تحية بسيطة
+    # Greetings
     if "السلام عليكم" in msg or msg.startswith("سلام") or msg == "كيف حالك":
         send_text(psid, "مرحبا")
         send_quick(psid)
         return
 
-    # معلومات المطوّر
+    # Developer identity
     if any(kw in msg for kw in ["مطورك", "من مطورك", "من صنعك", "من أنشأك"]):
         send_text(psid, "aymen bourai هو مطوري وأنا مطيع له وأبقى مساعدًا له.")
         send_text(psid, DEV_PROFILE_URL)
@@ -181,16 +199,15 @@ def handle_message(psid, text):
         send_text(psid, "نعم، aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، شاب مبرمج لتطبيقات ومواقع يحب البرمجة وأتمنى له مستقبل باهر. من ناحية الدراسة لا أعلم، وهو شخص انطوائي يحب العزلة.")
         return
 
-    # الرد من API
+    # Default: call API and clean
     try:
         r = requests.get(GPT_API, params={"text": text}, timeout=20)
-        reply = clean_api_reply(r.text)
+        reply = clean_api_reply(r.text or "")
     except Exception as e:
         reply = f"حدث خطأ أثناء الاتصال بالخدمة: {e}"
 
     send_text(psid, reply)
     send_quick(psid)
-
 
 @app.route("/api/healthz")
 def healthz():
