@@ -13,7 +13,7 @@ DEV_PROFILE_URL = os.getenv("DEV_PROFILE_URL", "https://www.facebook.com/aymen.b
 
 GRAPH_URL = "https://graph.facebook.com/v17.0/me/messages"
 
-# ===== Helpers to send messages =====
+# ===== Send helpers =====
 def fb_send(payload):
     if not PAGE_ACCESS_TOKEN:
         print("⚠️ PAGE_ACCESS_TOKEN is missing")
@@ -32,7 +32,7 @@ def send_text(psid, text):
     fb_send({"recipient": {"id": psid}, "message": {"text": text}})
 
 def send_quick(psid):
-    """Only two quick replies: Developer + Share (works in Lite)."""
+    """Quick replies: Developer + Share (تشتغل على Messenger وLite)."""
     payload = {
         "recipient": {"id": psid},
         "message": {
@@ -46,7 +46,7 @@ def send_quick(psid):
     fb_send(payload)
 
 def send_share(psid):
-    """Generic bubble with element_share + fallback URL for Lite."""
+    """Bubble مشاركة؛ في Lite يبقى زر الرابط يعمل كبديل."""
     payload = {
         "recipient": {"id": psid},
         "message": {
@@ -91,15 +91,15 @@ def webhook():
             if not psid:
                 continue
 
-            # postbacks
+            # Postbacks
             if "postback" in event:
                 handle_postback(psid, (event["postback"] or {}).get("payload"))
                 continue
 
-            # messages
+            # Messages
             if "message" in event:
                 msg = event["message"]
-                # quick reply payload
+                # Quick reply payload
                 qr = (msg.get("quick_reply") or {}).get("payload")
                 if qr:
                     handle_postback(psid, qr)
@@ -113,26 +113,40 @@ def webhook():
 
     return jsonify({"status": "ok"}), 200
 
-# ===== Logic =====
+# ===== Cleaning: remove time/date/dev/answer/TRX and quotes =====
 CLEAN_PATTERNS = [
     r'(?i)t[\W_]*_?[\W_]*r[\W_]*_?[\W_]*x[\W_]*_?[\W_]*a[\W_]*i',  # T_R_X_AI variants
     r'(?i)\banswer\b',
     r'(?i)\bdate\b',
-    r'(?i)\bdev\b'
+    r'(?i)\bdev\b',
+    r'(?i)\btime\b',
+    # ISO date 2025-11-12
+    r'\b\d{4}-\d{2}-\d{2}\b',
+    # common date 12/11/2025 or 12-11-25
+    r'\b\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\b',
+    # time 14:05 or 2:05 PM
+    r'\b\d{1,2}:\d{2}(:\d{2})?\s?(AM|PM|am|pm)?\b'
 ]
 
 def clean_api_text(t: str) -> str:
     if not t:
         return ""
+    # Remove labeled lines like "Answer: ..." / "Date: ..." / "Dev: ..." / "Time: ..."
+    t = re.sub(r'(?im)^\s*(answer|date|dev|time)\s*:\s*.*$', '', t)
+    # Remove target tokens/patterns wherever they appear
     for pat in CLEAN_PATTERNS:
         t = re.sub(pat, '', t)
-    # also remove labels like "Answer:" "Date:" (case-insensitive)
-    t = re.sub(r'(?i)\b(answer|date)\s*:\s*', '', t)
-    return t.strip()
+    # Remove quotes/backticks
+    t = t.replace('"', '').replace("'", '').replace("`", '')
+    # Collapse extra whitespace and punctuation artifacts
+    t = re.sub(r'\s+', ' ', t).strip()
+    t = re.sub(r'^[\-\:\.\,;\/\s]+|[\-\:\.\,;\/\s]+$', '', t)
+    return t
 
 def short_brand_line():
     return "مساعد أيمن — رد فوري بإجابات مختصرة وقوية."
 
+# ===== Logic =====
 def handle_postback(psid, payload):
     p = (payload or "").upper()
     if p in ("GET_STARTED", "START"):
@@ -141,7 +155,7 @@ def handle_postback(psid, payload):
         return
 
     if p == "DEV_INFO":
-        # Per request: show ONLY the profile link
+        # المطلوب: يظهر رابط الحساب فقط
         send_text(psid, DEV_PROFILE_URL)
         return
 
@@ -155,24 +169,24 @@ def handle_postback(psid, payload):
 def handle_message(psid, text):
     msg = (text or "").strip().lower()
 
-    # Greetings -> simple "مرحبا" as requested
+    # تحية مختصرة جدًا كما طلبت
     if "السلام عليكم" in msg or msg.startswith("سلام") or msg == "كيف حالك":
         send_text(psid, "مرحبا")
         send_quick(psid)
         return
 
-    # developer identity phrases
+    # هوية المطوّر
     if any(kw in msg for kw in ["مطورك", "من مطورك", "من صنعك", "من أنشأك", "من انشأك"]):
         send_text(psid, "aymen bourai هو مطوري وأنا مطيع له وأبقى مساعدًا له.")
         send_text(psid, DEV_PROFILE_URL)
         return
 
-    # when mentioning aymen bourai
+    # ذكر اسم المطوّر
     if "aymen bourai" in msg or ("aymen" in msg and "bourai" in msg):
         send_text(psid, "نعم، aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، شاب مبرمج لتطبيقات ومواقع يحب البرمجة وأتمنى له مستقبل باهر. من ناحية الدراسة لا أعلم، وهو شخص انطوائي يحب العزلة.")
         return
 
-    # default: call external API and clean
+    # الرد العام عبر API + التنظيف القوي
     try:
         r = requests.get(GPT_API, params={"text": text}, timeout=25)
         raw = r.text or ""
