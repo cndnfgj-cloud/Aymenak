@@ -1,142 +1,185 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 import requests
-import random
-import string
-from user_agent import generate_user_agent
+import json
 import os
+from datetime import datetime, timedelta, timezone
+from dateutil import parser
 
 app = Flask(__name__)
 
 # ===========================================================
-# إعدادات البوت (يجب عليك تعبئة رمز الوصول هنا أو في متغيرات البيئة)
+# إعدادات البوت والتوكنات
 # ===========================================================
 
-# رمز التحقق الذي وضعته أنت
+# رمز التحقق للويب هوك
 VERIFY_TOKEN = "boykta 2023"
 
-# ضع هنا Page Access Token الخاص بصفحتك من فيسبوك
-# يفضل وضعه في Environment Variables في Vercel باسم FB_PAGE_ACCESS_TOKEN
+# توكن صفحة الفيسبوك (يفضل وضعه في Environment Variables)
 PAGE_ACCESS_TOKEN = os.environ.get('FB_PAGE_ACCESS_TOKEN', 'ضع_توكن_الصفحة_هنا_اذا_لم_تستخدم_ENV')
 
+# إعدادات Vulcan API (من كودك الأصلي)
+DEVICE_ID = "B4A13AE09F22A2A4"
+MAX_CHAT_HISTORY = 20 # تم تقليله قليلاً لتسريع المعالجة في vercel
+MAX_TOKENS = 0
+
+# ذاكرة مؤقتة للمحادثات والتوكن (ملاحظة: في vercel قد يتم تصفيرها عند إعادة تشغيل الخادم)
+user_chats = {}
+access_token_data = {"token": "", "expiry": datetime.now(timezone.utc)}
+
 # ===========================================================
-# دالة الاتصال بـ API الذكاء الاصطناعي (Claila)
+# دوال Vulcan API (كما هي مع تعديلات طفيفة)
 # ===========================================================
-def get_claila_ai_response(user_message):
-    url = "https://app.claila.com/api/v2/unichat2"
-    
-    # توليد Session ID عشوائي كما في كودك
-    session_id = "".join(random.choice("0123456789") for _ in range(10))
-    
-    payload = {
-        'model': "gpt-4.1-mini",
-        'calltype': "completion",
-        'message': f'{user_message}',
-        'sessionId': session_id,
-        'chat_mode': "chat",
-        'websearch': "false"
+
+def get_access_token(force_refresh=False):
+    global access_token_data
+    # التحقق من صلاحية التوكن الحالي
+    if not force_refresh and access_token_data["token"] and access_token_data["expiry"] > datetime.now(timezone.utc):
+        return access_token_data["token"]
+
+    url = "https://api.vulcanlabs.co/smith-auth/api/v1/token"
+    payload = {"device_id": DEVICE_ID, "order_id": "", "product_id": "", "purchase_token": "", "subscription_id": ""}
+    headers = {
+        "User-Agent": "Chat Smith Android, Version 4.0.5(1032)",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "x-vulcan-application-id": "com.smartwidgetlabs.chatgpt",
+        "x-vulcan-request-id": "9149487891757687027212"
     }
-    
     try:
-        headers = {
-            'User-Agent': generate_user_agent(),
-            'sec-ch-ua-platform': '"Android"',
-            'sec-ch-ua': '"Google Chrome";v="141", "Not?A_Brand";v="8", "Chromium";v="141"',
-            'sec-ch-ua-mobile': '?1',
-            'x-requested-with': 'XMLHttpRequest',
-            'origin': 'https://app.claila.com',
-            'sec-fetch-site': 'same-origin',
-            'sec-fetch-mode': 'cors',
-            'sec-fetch-dest': 'empty',
-            'referer': 'https://app.claila.com/chat?uid=3887ac09&lang=ar',
-            'accept-language': 'ar-IQ,ar;q=0.9',
-            'priority': 'u=1, i'
-        }
-
-        response = requests.post(url, data=payload, headers=headers, timeout=10)
-        if response.status_code == 200:
-            return response.text
+        # تقليل المهلة لتناسب Vercel
+        response = requests.post(url, json=payload, headers=headers, timeout=9)
+        data = response.json()
+        token = data.get("AccessToken", "")
+        expiry_str = data.get("AccessTokenExpiration")
+        if expiry_str:
+            expiry = parser.isoparse(expiry_str)
         else:
-            return "عذراً، حدث خطأ في الاتصال بالخادم."
+            expiry = datetime.now(timezone.utc) + timedelta(minutes=30)
+        access_token_data = {"token": token, "expiry": expiry}
+        return token
     except Exception as e:
-        return f"حدث خطأ: {str(e)}"
+        print(f"Token Error: {e}")
+        return ""
 
-# ===========================================================
-# دالة إرسال الرسالة إلى فيسبوك
-# ===========================================================
-def send_facebook_message(recipient_id, text):
-    params = {
-        "access_token": PAGE_ACCESS_TOKEN
+def query_vulcan(token, messages):
+    url = "https://api.vulcanlabs.co/smith-v2/api/v7/chat_android"
+    payload = {
+        "model": "gpt-4o-mini",
+        "user": DEVICE_ID,
+        "messages": messages,
+        "max_tokens": MAX_TOKENS,
+        "nsfw_check": True
     }
     headers = {
-        "Content-Type": "application/json"
+        "User-Agent": "Chat Smith Android, Version 4.0.5(1032)",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "x-auth-token": token,
+        "authorization": f"Bearer {token}",
+        "x-vulcan-application-id": "com.smartwidgetlabs.chatgpt",
+        "x-vulcan-request-id": "9149487891757687028153"
     }
+    try:
+        # Vercel لديه مهلة 10 ثواني، نجعل الطلب 8 ثواني لنتجنب قتل العملية
+        response = requests.post(url, json=payload, headers=headers, timeout=8)
+        if response.status_code == 200:
+            data = response.json()
+            return data["choices"][0]["Message"]["content"]
+        else:
+            return f"Error from API: {response.status_code}"
+    except Exception as e:
+        print(f"Vulcan Chat Error: {e}")
+        return "عذراً، الخادم مشغول حالياً."
+
+# ===========================================================
+# دوال فيسبوك
+# ===========================================================
+
+def send_facebook_message(recipient_id, text):
+    params = {"access_token": PAGE_ACCESS_TOKEN}
+    headers = {"Content-Type": "application/json"}
     data = {
         "recipient": {"id": recipient_id},
         "message": {"text": text}
     }
-    
-    r = requests.post("https://graph.facebook.com/v18.0/me/messages", params=params, headers=headers, json=data)
-    return r.status_code
+    # استخدام Graph API
+    requests.post("https://graph.facebook.com/v19.0/me/messages", params=params, headers=headers, json=data)
 
 # ===========================================================
-# نقطة الاتصال (Webhook Route)
+# Webhook Route
 # ===========================================================
+
 @app.route('/', methods=['GET', 'POST'])
 def webhook():
-    # 1. التحقق من الويب هوك (Verification)
+    # 1. التحقق (Verification)
     if request.method == 'GET':
-        mode = request.args.get('hub.mode')
-        token = request.args.get('hub.verify_token')
-        challenge = request.args.get('hub.challenge')
+        if request.args.get('hub.mode') == 'subscribe' and request.args.get('hub.verify_token') == VERIFY_TOKEN:
+            return request.args.get('hub.challenge'), 200
+        return "Verification failed", 403
 
-        if mode and token:
-            if mode == 'subscribe' and token == VERIFY_TOKEN:
-                print("WEBHOOK_VERIFIED")
-                return challenge, 200
-            else:
-                return "Verification failed", 403
-        return "Hello World", 200
-
-    # 2. استقبال الرسائل (POST)
+    # 2. استقبال الرسائل (Handling Messages)
     if request.method == 'POST':
-        data = request.json
-        
-        # التأكد من أن الطلب قادم من كائن صفحة
-        if data.get('object') == 'page':
-            for entry in data.get('entry', []):
-                for messaging_event in entry.get('messaging', []):
-                    
-                    sender_id = messaging_event['sender']['id']
-                    
-                    # --- معالجة الرسائل النصية ---
-                    if 'message' in messaging_event and 'text' in messaging_event['message']:
-                        user_text = messaging_event['message']['text']
-                        
-                        # المنطق الخاص بالمطور Aymen Bourai
-                        response_text = ""
-                        
-                        if "aymen bourai" in user_text.lower():
-                             response_text = "نعم aymen bourai هو مطوري عمره 18 سنة من مواليد 2007 شخص شاب مبرمج لتطبيقات ومواقع يحب البرمجة واتمنى له مستقبل باهر من ناحية الدراسة لاأعلم عن هذا امر لكنه شخص انطوائي يحب العزلة"
-                        elif "من قام بإنتاجك" in user_text or "من مطورك" in user_text:
-                             response_text = "aymen bourai هو مطوري وانا مطيع له وأبقى مساعداً له."
-                        else:
-                            # جلب الرد من API الذكاء الاصطناعي
-                            response_text = get_claila_ai_response(user_text)
-                        
-                        send_facebook_message(sender_id, response_text)
+        try:
+            data = request.json
+            if data.get('object') == 'page':
+                for entry in data.get('entry', []):
+                    for event in entry.get('messaging', []):
+                        sender_id = event['sender']['id']
 
-                    # --- معالجة زر "بدء الاستخدام" (Postback) ---
-                    elif 'postback' in messaging_event:
-                        # عند الضغط على زر البدء، نعتبرها ترحيب ونرد فوراً
-                        payload = messaging_event['postback']['payload']
-                        if payload == 'GET_STARTED' or True: # الرد على أي زر
-                            welcome_text = "أهلاً بك! أنا بوت ذكي تم تطويري بواسطة aymen bourai. اسألني أي سؤال وسأجيبك."
-                            send_facebook_message(sender_id, welcome_text)
+                        # --- التعامل مع زر البدء (Postback) ---
+                        if 'postback' in event:
+                            payload = event['postback'].get('payload')
+                            if payload == 'GET_STARTED' or payload == 'STARTED':
+                                welcome_msg = "أهلاً بك! أنا بوت ذكي مطيع للمطور aymen bourai. اسألني أي سؤال."
+                                send_facebook_message(sender_id, welcome_msg)
+                            continue # ننتقل للحدث التالي
+
+                        # --- التعامل مع الرسائل النصية ---
+                        if 'message' in event and 'text' in event['message']:
+                            user_text = event['message']['text']
+                            
+                            # 1. المنطق الخاص بالمطور
+                            lower_text = user_text.lower()
+                            response_text = ""
+
+                            if "aymen bourai" in lower_text:
+                                response_text = "نعم aymen bourai هو مطوري عمره 18 سنة من مواليد 2007 شخص شاب مبرمج لتطبيقات ومواقع يحب البرمجة واتمنى له مستقبل باهر من ناحية الدراسة لاأعلم عن هذا امر لكنه شخص انطوائي يحب العزلة"
+                            
+                            elif "من قام بإنتاجك" in lower_text or "من مطورك" in lower_text or "من صنعك" in lower_text:
+                                response_text = "aymen bourai هو مطوري وانا مطيع له وابقا مساعد له."
+                            
+                            # 2. المنطق الخاص بالذكاء الاصطناعي (Vulcan)
+                            else:
+                                # جلب التوكن
+                                token = get_access_token()
+                                if not token:
+                                    send_facebook_message(sender_id, "فشل الاتصال بخادم المصادقة.")
+                                    continue
+
+                                # إدارة سجل المحادثة (بسيط)
+                                if sender_id not in user_chats:
+                                    user_chats[sender_id] = []
+                                
+                                # إضافة رسالة المستخدم
+                                user_chats[sender_id].append({"role": "user", "content": user_text})
+                                
+                                # قص السجل إذا كان طويلاً
+                                if len(user_chats[sender_id]) > MAX_CHAT_HISTORY:
+                                    user_chats[sender_id] = user_chats[sender_id][-MAX_CHAT_HISTORY:]
+
+                                # جلب الرد
+                                ai_response = query_vulcan(token, user_chats[sender_id])
+                                
+                                # إضافة رد البوت للسجل
+                                user_chats[sender_id].append({"role": "assistant", "content": ai_response})
+                                response_text = ai_response
+
+                            # إرسال الرد النهائي
+                            send_facebook_message(sender_id, response_text)
 
             return "EVENT_RECEIVED", 200
-        else:
-            return "Not a page object", 404
+        except Exception as e:
+            print(f"Error: {e}")
+            return "Error", 500
 
-# تشغيل التطبيق (للعمل المحلي، ولكن Vercel يديره تلقائياً)
-if __name__ == '__main__':
-    app.run(debug=True)
+    return "Hello World", 200
