@@ -1,15 +1,1 @@
-{
-    "version": 2,
-    "builds": [
-        {
-            "src": "api/index.py",
-            "use": "@vercel/python"
-        }
-    ],
-    "routes": [
-        {
-            "src": "/(.*)",
-            "dest": "/api/index.py"
-        }
-    ]
-}
+{ "version": 2, "builds": [ { "src": "facebook_bot_webhook.py", "use": "@vercel/python" } ], "routes": [ { "src": "/api/webhook", "dest": "facebook_bot_webhook.py" } ] }
