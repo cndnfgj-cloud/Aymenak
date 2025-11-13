@@ -10,11 +10,14 @@ app = Flask(__name__)
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "boykta 2023")
 GRAPH_URL = "https://graph.facebook.com/v17.0/me/messages"
-
 CLAILA_URL = "https://app.claila.com/api/v2/unichat2"
 
-# ===== إرسال لواجهة فيسبوك =====
+
+# ===== إرسال رسالة لفيسبوك =====
 def fb_send(payload):
+    if not PAGE_ACCESS_TOKEN:
+        print("❌ PAGE_ACCESS_TOKEN مفقود! أضفه في إعدادات Vercel.")
+        return
     try:
         r = requests.post(
             GRAPH_URL,
@@ -31,31 +34,8 @@ def send_text(psid, text):
     fb_send({"recipient": {"id": psid}, "message": {"text": text}})
 
 
-def send_quick(psid):
-    """أزرار بسيطة تظهر بعد كل رد."""
-    payload = {
-        "recipient": {"id": psid},
-        "message": {
-            "text": "يمكنك المتابعة أو اختيار أحد الخيارات:",
-            "quick_replies": [
-                {
-                    "content_type": "text",
-                    "title": "👨‍💻 من مطوّرك؟",
-                    "payload": "DEV_INFO",
-                },
-                {
-                    "content_type": "text",
-                    "title": "ℹ ما هو هذا البوت؟",
-                    "payload": "ABOUT_BOT",
-                },
-            ],
-        },
-    }
-    fb_send(payload)
-
-# ===== استدعاء API claila =====
+# ===== استدعاء claila =====
 def call_claila(prompt: str) -> str:
-    """يرسل السؤال إلى claila ويرجع نص الجواب فقط."""
     session_id = "".join(random.choice("0123456789") for _ in range(10))
 
     payload = {
@@ -68,7 +48,6 @@ def call_claila(prompt: str) -> str:
     }
 
     headers = {
-        # بدل user_agent الديناميكي نستخدم UA ثابت بسيط
         "User-Agent": "Mozilla/5.0 (Linux; Android 10; ChatBot Aymen)",
         "sec-ch-ua-platform": "\"Android\"",
         "sec-ch-ua": "\"Google Chrome\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\"",
@@ -88,28 +67,24 @@ def call_claila(prompt: str) -> str:
         raw = r.text
         print("CLAILA_RAW:", raw[:300])
 
-        # نحاول نفهمه على أنه JSON ونستخرج answer فقط
+        # نحاول نفهمه JSON ونجيب الحقل "answer" لو موجود
         try:
             j = r.json()
-            # لو فيه مفتاح "answer" خذه فقط (بدون date/dev…)
-            if isinstance(j, dict):
-                if "answer" in j and isinstance(j["answer"], str):
-                    return j["answer"].strip()
-                # لو ما فيه answer نجمع القيم النصية
-                parts = []
-                for v in j.values():
-                    if isinstance(v, str):
-                        parts.append(v)
-                if parts:
-                    return "\n".join(parts).strip()
+            if isinstance(j, dict) and isinstance(j.get("answer"), str):
+                return j["answer"].strip()
         except Exception:
             pass
 
-        # لو مو JSON نرجع النص كما هو
         return raw.strip() or "لم أستطع فهم الرد حالياً."
     except Exception as e:
         print("CLAILA_ERROR:", e)
-        return "حدث خطأ أثناء الاتصال بالخدمة."
+        return "حدث خطأ أثناء الاتصال بخدمة الذكاء الاصطناعي."
+
+
+# ===== Healthz =====
+@app.route("/api/healthz")
+def healthz():
+    return jsonify({"ok": True})
 
 
 # ===== Webhook Verify (GET) =====
@@ -118,6 +93,8 @@ def verify():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
+
+    print("VERIFY_HIT:", mode, token)
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
         return challenge, 200
@@ -128,6 +105,8 @@ def verify():
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
     data = request.get_json(silent=True) or {}
+    print("WEBHOOK_EVENT:", json.dumps(data)[:500])
+
     if data.get("object") != "page":
         return jsonify({"status": "ignored"}), 200
 
@@ -137,78 +116,53 @@ def webhook():
             if not psid:
                 continue
 
-            # ===== Postbacks (مثل GET_STARTED) =====
+            # POSTBACK (مثل GET_STARTED)
             if "postback" in event:
-                handle_postback(psid, event["postback"].get("payload", ""))
+                payload = event["postback"].get("payload", "")
+                handle_postback(psid, payload)
                 continue
 
-            # ===== Messages =====
-            if "message" in event:
-                msg_obj = event["message"]
-
-                # Quick reply
-                qr = (msg_obj.get("quick_reply") or {}).get("payload")
-                if qr:
-                    handle_postback(psid, qr)
-                    continue
-
-                # نص عادي
-                if "text" in msg_obj:
-                    handle_message(psid, msg_obj["text"])
-                else:
-                    send_text(psid, "أرسل نصًا فقط 💬")
-                    send_quick(psid)
+            # رسالة عادية
+            if "message" in event and "text" in event["message"]:
+                msg_text = event["message"]["text"]
+                handle_message(psid, msg_text)
 
     return jsonify({"status": "ok"}), 200
 
 
-# ===== منطق البوستباك / الأزرار =====
+# ===== التعامل مع الأزرار / POSTBACK =====
 def handle_postback(psid, payload: str):
     p = (payload or "").upper()
+    print("POSTBACK:", psid, p)
 
     if p in ("GET_STARTED", "START"):
         send_text(
             psid,
-            "👋 مرحبًا! أنا بوت ذكاء اصطناعي أجيبك مباشرة على أي سؤال.\n"
-            "فقط أرسل سؤالك بالعربية أو الإنجليزية."
-        )
-        send_quick(psid)
-        return
-
-    if p == "DEV_INFO":
-        send_text(psid, "مطوري هو aymen bourai، وأنا مطيع له وأبقى مساعدًا له 🤝.")
-        send_text(psid, "حساب المطوّر على فيسبوك:\nhttps://www.facebook.com/aymen.bourai.2025")
-        return
-
-    if p == "ABOUT_BOT":
-        send_text(
-            psid,
-            "أنا بوت ذكاء اصطناعي مبني على واجهة claila، تم تطويري وبرمجتي باحترافية بواسطة المبرمج الشاب aymen bourai."
+            "👋 مرحبًا! أنا بوت ذكاء اصطناعي من تطوير aymen bourai.\n"
+            "فقط أرسل سؤالك وسأجيبك مباشرة."
         )
         return
 
-    # افتراضي لأي payload آخر
-    send_text(psid, "أنا هنا لمساعدتك — أرسل سؤالك مباشرة 👌")
+    send_text(psid, "أرسل سؤالك في رسالة نصية وسأحاول مساعدتك.")
 
 
 # ===== منطق الرسائل =====
 def handle_message(psid, text: str):
     msg = (text or "").strip()
     low = msg.lower()
+    print("MSG_FROM:", psid, "TEXT:", msg)
 
-    # تحية بسيطة
+    # تحية
     if "سلام" in msg or "السلام عليكم" in msg:
         send_text(psid, "وعليكم السلام ورحمة الله وبركاته 🌿")
-        send_quick(psid)
         return
 
-    # سؤال عن المطور
+    # المطور
     if any(kw in msg for kw in ["مطورك", "من مطورك", "من صنعك", "من أنشأك", "من انشاك"]):
         send_text(psid, "مطوري هو aymen bourai، وأنا مطيع له وأبقى مساعدًا له 🤝.")
         send_text(psid, "حساب المطوّر على فيسبوك:\nhttps://www.facebook.com/aymen.bourai.2025")
         return
 
-    # ذكر اسم المطوّر صراحة
     if "aymen bourai" in low:
         send_text(
             psid,
@@ -218,13 +172,12 @@ def handle_message(psid, text: str):
         )
         return
 
-    # الافتراضي: نرسل السؤال إلى API ونرجّع الجواب
+    # الافتراضي: إرسل السؤال للـ API
     answer = call_claila(msg)
     send_text(psid, answer)
-    send_quick(psid)
 
 
-# ===== Health Check =====
-@app.route("/api/healthz")
-def healthz():
-    return jsonify({"ok": True})
+# نقطة دخول عادية (اختيارية للاختبار)
+@app.route("/")
+def root():
+    return "Facebook bot is running.", 200
