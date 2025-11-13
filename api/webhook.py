@@ -2,68 +2,68 @@ from http.server import BaseHTTPRequestHandler
 import json
 import os
 import requests
+import random
 from urllib.parse import urlparse, parse_qs
 
-# توكن صفحة فيسبوك (من متغيرات البيئة في Vercel)
-PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 
-# توكن تأكيد الويب هوك
-# إذا لم تضبطه في Vercel سيستخدم القيمة الافتراضية "boykta 2023"
+PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "boykta 2023")
 
-FB_API_URL = "https://graph.facebook.com/v18.0/me/messages"
+FB_API = "https://graph.facebook.com/v18.0/me/messages"
 
 
-def call_vetrex_api(user_text: str) -> str:
-    """
-    استدعاء API vetrex وإرجاع الرد فقط كنص.
-    """
-    base_url = "https://vetrex.x10.mx/api/gpt4.php"
+# ============================
+# 1 — استدعاء API Claila
+# ============================
 
-    params = {
-        "text": user_text,
-        "prompt": "انا مطورك اسمي ديفل",
+def ask_claila(text: str) -> str:
+    url = "https://app.claila.com/api/v2/unichat2"
+
+    payload = {
+        'model': "gpt-4.1-mini",
+        'calltype': "completion",
+        'message': text,
+        'sessionId': "".join(random.choice("0123456789") for _ in range(10)),
+        'chat_mode': "chat",
+        'websearch': "false"
     }
 
-    resp = requests.get(base_url, params=params, timeout=40)
-    resp.raise_for_status()
-    answer = resp.text.strip()
+    headers = {
+        'User-Agent': "Mozilla/5.0",
+        'origin': "https://app.claila.com",
+        'referer': "https://app.claila.com/chat",
+        'accept-language': "ar",
+        'x-requested-with': "XMLHttpRequest"
+    }
 
-    if not answer:
-        return "لم أستقبل أي رد من خدمة الذكاء الاصطناعي، حاول مرة أخرى."
+    try:
+        resp = requests.post(url, data=payload, headers=headers, timeout=30)
+        data = resp.json()
 
-    return answer
+        # نرجع الرد فقط
+        return data.get("reply", "لم يصل رد من الخادم..")
 
+    except Exception:
+        return "حدث خطأ أثناء الاتصال بالخادم."
+
+
+# ============================
+# 2 — منطق الرد الخاص بك
+# ============================
 
 def generate_reply(user_text: str) -> str:
-    """
-    منطق تحديد الرد:
-    - أسئلة عن المطوّر → رد خاص
-    - كلمة 'aymen bourai' → سيرة ثابتة
-    - غير ذلك → استدعاء VETREX API
-    """
-    if not user_text:
-        return "مرحباً، أرسل لي أي سؤال وسأحاول مساعدتك 😊"
-
     text = user_text.strip()
     lower = text.lower()
 
-    # أسئلة عن المطوّر / من أنشأك / من صمّمك...
+    # أسئلة عن المطور
     dev_questions = [
-        "من مطورك",
-        "من مبرمجك",
-        "من صممك",
-        "من انشأك",
-        "من أنشأك",
-        "من انتجك",
-        "من أنتجك",
-        "من قام ببرمجتك",
-        "من صنعك",
+        "من مطورك", "من مبرمجك", "من انشأك", "من صممك",
+        "من أنتجك", "من قام ببرمجتك", "من صنعك"
     ]
-    if any(q in text for q in dev_questions):
-        return "aymen bourai هو مبرمجي، لكن أنا مجرد ذكاء اصطناعي مساعد له 😊"
 
-    # ذكر الاسم مباشرة
+    if any(q in text for q in dev_questions):
+        return "aymen bourai هو مبرمجي، لكني مجرد ذكاء اصطناعي مساعد له 😊"
+
     if "aymen bourai" in lower:
         return (
             "نعم aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، "
@@ -71,105 +71,75 @@ def generate_reply(user_text: str) -> str:
             "وأتمنى له مستقبلاً باهراً 🌟"
         )
 
-    # باقي الأسئلة → نستخدم API vetrex
-    try:
-        return call_vetrex_api(text)
-    except Exception:
-        return "حدث خطأ أثناء الاتصال بواجهة الذكاء الاصطناعي الخارجية. حاول مرة أخرى لاحقاً."
+    # غير ذلك → سؤال للذكاء الاصطناعي
+    return ask_claila(text)
 
 
-def send_message(recipient_id: str, message_text: str) -> None:
-    """
-    إرسال رسالة نصية إلى مستخدم فيسبوك ماسنجر.
-    """
+# ============================
+# 3 — إرسال رسالة لماسنجر
+# ============================
+
+def send_msg(user_id: str, message: str):
     if not PAGE_ACCESS_TOKEN:
-        # لو نسيت تضيف PAGE_ACCESS_TOKEN في Vercel، لن يرسل البوت أي شيء
         return
 
     payload = {
-        "recipient": {"id": recipient_id},
-        "messaging_type": "RESPONSE",
-        "message": {"text": message_text},
+        "recipient": {"id": user_id},
+        "message": {"text": message},
+        "messaging_type": "RESPONSE"
     }
+
     params = {"access_token": PAGE_ACCESS_TOKEN}
 
-    try:
-        requests.post(FB_API_URL, params=params, json=payload, timeout=20)
-    except Exception:
-        # نتجاهل الأخطاء هنا حتى لا نكسر الاستجابة للويب هوك
-        pass
+    requests.post(FB_API, params=params, json=payload)
 
+
+# ============================
+# 4 — Webhook Handler
+# ============================
 
 class handler(BaseHTTPRequestHandler):
-    """
-    Webhook فيسبوك ماسنجر ليعمل على Vercel (Python Runtime).
-    - GET: لتأكيد الويب هوك (verify token)
-    - POST: لاستقبال رسائل المستخدمين والرد عليها مباشرة
-    """
-
-    def _send_json(self, status=200, data=None):
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.end_headers()
-        if data is not None:
-            self.wfile.write(json.dumps(data).encode("utf-8"))
-
     def do_GET(self):
-        """
-        فيسبوك يستعمل GET أول مرة لتأكيد الـ Webhook:
-        /api/webhook?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...
-        """
-        parsed = urlparse(self.path)
-        query = parse_qs(parsed.query)
+        # فيسبوك يطلب Verify Token
+        query = parse_qs(urlparse(self.path).query)
 
-        mode = query.get("hub.mode", [None])[0]
-        token = query.get("hub.verify_token", [None])[0]
-        challenge = query.get("hub.challenge", [None])[0]
+        mode = query.get("hub.mode", [""])[0]
+        token = query.get("hub.verify_token", [""])[0]
+        challenge = query.get("hub.challenge", [""])[0]
 
-        if mode == "subscribe" and token == VERIFY_TOKEN and challenge:
+        if mode == "subscribe" and token == VERIFY_TOKEN:
             self.send_response(200)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(challenge.encode("utf-8"))
+            self.wfile.write(challenge.encode())
         else:
             self.send_response(403)
             self.end_headers()
-            self.wfile.write(b"Forbidden")
 
     def do_POST(self):
-        """
-        استقبال الأحداث من ماسنجر (رسائل، Postbacks، إلخ)
-        هنا نتخطى موضوع زر "بدء الاستخدام" بالكامل:
-        أي رسالة نصية من المستخدم → نرد عليها مباشرة.
-        """
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
-
-        try:
-            data = json.loads(body.decode("utf-8"))
-        except Exception:
-            return self._send_json(400, {"error": "invalid_json"})
+        data = json.loads(body.decode())
 
         if data.get("object") != "page":
-            return self._send_json(404, {"error": "not_a_page_event"})
+            return
 
         for entry in data.get("entry", []):
             for event in entry.get("messaging", []):
-                sender_id = event.get("sender", {}).get("id")
 
-                # رسالة نصية من المستخدم
+                sender = event.get("sender", {}).get("id")
+
+                # رسالة نصية مباشرة
                 if "message" in event and "text" in event["message"]:
-                    user_text = event["message"]["text"]
-                    reply = generate_reply(user_text)
-                    if sender_id and reply:
-                        send_message(sender_id, reply)
+                    txt = event["message"]["text"]
+                    reply = generate_reply(txt)
+                    send_msg(sender, reply)
 
-                # لو فيه postback (مثلاً من زر "Get Started") نعامله كنص بسيط
+                # postback (زر بدء الاستخدام)
                 elif "postback" in event:
                     payload = event["postback"].get("payload", "")
-                    # نعتبر أن أي postback هو بداية محادثة
                     reply = generate_reply(payload or "مرحبا")
-                    if sender_id and reply:
-                        send_message(sender_id, reply)
+                    send_msg(sender, reply)
 
-        return self._send_json(200, {"status": "ok"})
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'{"status":"ok"}')
