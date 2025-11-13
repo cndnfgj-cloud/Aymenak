@@ -4,33 +4,21 @@ import os
 import requests
 from urllib.parse import urlparse, parse_qs, quote_plus
 
-# توكن صفحة فيسبوك (تحطه في Vercel Environment Variables)
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
-
-# توكن التأكيد للويب هوك
-# إذا ما وجد في المتغيرات، يستعمل القيمة الافتراضية "boykta 2023"
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "boykta 2023")
-
 FB_API_URL = "https://graph.facebook.com/v18.0/me/messages"
 
 
 def generate_reply(user_text: str) -> str:
-    """
-    توليد الرد على رسالة المستخدم.
-    - ردود خاصة لـ aymen bourai
-    - باقي الرسائل تُرسل للـ API الخارجية
-    """
     if not user_text:
         return "مرحباً، أرسل لي أي سؤال وسأحاول مساعدتك 😊"
 
     text = user_text.strip()
     lower = text.lower()
 
-    # رد خاص على سؤال: من قام بإنتاجك
     if "من قام بإنتاجك" in text or "من قام بانتاجك" in text:
         return "aymen bourai هو مطوري وانا مطيع له وابقى مساعداً له."
 
-    # رد خاص على: aymen bourai
     if "aymen bourai" in lower:
         return (
             "نعم aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، "
@@ -38,7 +26,6 @@ def generate_reply(user_text: str) -> str:
             "وأتمنى له مستقبلاً باهراً 🌟"
         )
 
-    # استدعاء API الخارجية (gpt4.php)
     try:
         url = "https://vetrex.x10.mx/api/gpt4.php?text=" + quote_plus(text)
         resp = requests.get(url, timeout=40)
@@ -52,12 +39,7 @@ def generate_reply(user_text: str) -> str:
 
 
 def send_message(recipient_id: str, message_text: str) -> None:
-    """
-    إرسال رسالة نصية إلى مستخدم ماسنجر.
-    البوت فقط يجيب نصياً بدون أزرار أو قوالب أو 'اتخاذ إجراء'.
-    """
     if not PAGE_ACCESS_TOKEN:
-        # لو نسيت تضيف التوكن في Vercel البوت لن يستطيع الرد
         return
 
     payload = {
@@ -70,17 +52,10 @@ def send_message(recipient_id: str, message_text: str) -> None:
     try:
         requests.post(FB_API_URL, params=params, json=payload, timeout=20)
     except Exception:
-        # نتجاهل الأخطاء حتى لا نكسر الرد على فيسبوك
         pass
 
 
 class handler(BaseHTTPRequestHandler):
-    """
-    Webhook فيسبوك ماسنجر ليعمل على Vercel (Python Runtime).
-    - GET: لتأكيد الـ webhook (verify token)
-    - POST: لاستقبال رسائل المستخدمين والرد عليهم
-    """
-
     def _send_json(self, status=200, data=None):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -89,10 +64,6 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode("utf-8"))
 
     def do_GET(self):
-        """
-        فيسبوك يستعمل GET أول مرة لتأكيد الـ Webhook:
-        /api/webhook?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...
-        """
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
 
@@ -101,7 +72,6 @@ class handler(BaseHTTPRequestHandler):
         challenge = query.get("hub.challenge", [None])[0]
 
         if mode == "subscribe" and token == VERIFY_TOKEN and challenge:
-            # فيسبوك يتوقع أن نرجع الـ challenge كما هو بنص عادي
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -112,9 +82,6 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(b"Forbidden")
 
     def do_POST(self):
-        """
-        استقبال الأحداث من ماسنجر (رسائل، Postbacks، إلخ)
-        """
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
@@ -130,14 +97,12 @@ class handler(BaseHTTPRequestHandler):
             for event in entry.get("messaging", []):
                 sender_id = event.get("sender", {}).get("id")
 
-                # رسالة نصية عادية من المستخدم
                 if "message" in event and "text" in event["message"]:
                     user_text = event["message"]["text"]
                     reply = generate_reply(user_text)
                     if sender_id and reply:
                         send_message(sender_id, reply)
 
-                # Postback (مثل زر Get Started) → نرسل رسالة ترحيب
                 elif "postback" in event:
                     if sender_id:
                         welcome = (
