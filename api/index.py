@@ -1,155 +1,241 @@
+import os
+import re
 import json
 import requests
-from datetime import datetime, timezone
-from dateutil import parser
+from flask import Flask, request, jsonify
 
-VERIFY_TOKEN = "boykta 2023"
-PAGE_ACCESS_TOKEN = "ضع_توكن_صفحتك_هنا"
-DEVICE_ID = "B4A13AE09F22A2A4"
+app = Flask(__name__)
 
-MAX_CHAT_HISTORY = 60
-user_chats = {}
+# ===== Settings =====
+PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "boykta 2023")
+GPT_API = "https://vetrex.x10.mx/api/gpt4.php"
+DEV_PROFILE_URL = os.getenv("DEV_PROFILE_URL", "https://www.facebook.com/aymen.bourai.2025")
+GRAPH_URL = "https://graph.facebook.com/v17.0/me/messages"
 
-access_token_data = {"token": "", "expiry": datetime.now(timezone.utc)}
+FALLBACK_MSG = "أنا هنا لمساعدتك — اسألني أي شيء 👌"
 
-# ----------------------------------------------------
-# الحصول على توكن Vulcan
-# ----------------------------------------------------
-def get_access_token(force_refresh=False):
-    global access_token_data
-
-    if not force_refresh and access_token_data["token"] and access_token_data["expiry"] > datetime.now(timezone.utc):
-        return access_token_data["token"]
-
-    url = "https://api.vulcanlabs.co/smith-auth/api/v1/token"
-    payload = {
-        "device_id": DEVICE_ID,
-        "order_id": "",
-        "product_id": "",
-        "purchase_token": "",
-        "subscription_id": ""
-    }
-    headers = {
-        "User-Agent": "Chat Smith Android",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "x-vulcan-application-id": "com.smartwidgetlabs.chatgpt"
-    }
-
+# ===== FB send helpers =====
+def fb_send(payload):
     try:
-        response = requests.post(url, json=payload, headers=headers)
-        data = response.json()
+        r = requests.post(
+            GRAPH_URL,
+            params={"access_token": PAGE_ACCESS_TOKEN},
+            json=payload,
+            timeout=20,
+        )
+        print("FB send:", r.status_code, r.text[:200])
+    except Exception as e:
+        print("⚠️ send error:", e)
 
-        token = data.get("AccessToken", "")
-        expiry = parser.isoparse(data.get("AccessTokenExpiration"))
 
-        access_token_data = {"token": token, "expiry": expiry}
-        return token
+def send_text(psid, text):
+    fb_send({"recipient": {"id": psid}, "message": {"text": text}})
 
-    except:
+
+# ===== Verify =====
+@app.route("/api/webhook", methods=["GET"])
+def verify():
+    mode = request.args.get("hub.mode")
+    token = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    return "خطأ في التحقق", 403
+
+
+# ===== Incoming =====
+@app.route("/api/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json(silent=True) or {}
+    if data.get("object") != "page":
+        return jsonify({"status": "ignored"}), 200
+
+    for entry in data.get("entry", []):
+        for event in entry.get("messaging", []):
+            psid = event.get("sender", {}).get("id")
+            if not psid:
+                continue
+
+            # Postbacks
+            if "postback" in event:
+                handle_postback(psid, event["postback"].get("payload", ""))
+                continue
+
+            # Messages
+            if "message" in event:
+                msg = event["message"]
+                if "text" in msg:
+                    handle_message(psid, msg["text"])
+                else:
+                    send_text(psid, "أرسل نصًا فقط 💬")
+
+    return jsonify({"status": "ok"}), 200
+
+
+# ===== Cleaning helpers =====
+DISALLOWED_RE = re.compile(
+    r'(?i)('
+    r'\bdate\b|'
+    r'\banswer\b|'
+    r'\bdev\b|'
+    r't[_\W-]*r[_\W-]*x[_\W-]*a[_\W-]*i|'  # T_R_X_AI بأشكاله
+    r'dont\s*forget\s*to\s*support\s*the\s*channel'
+    r')'
+)
+LINK_OR_AT_RE = re.compile(r'http\S+|www\.\S+|@\S+')
+TIME_RE = re.compile(r'\b\d{1,2}:\d{2}(:\d{2})?\s*(AM|PM|am|pm)?\b')
+ISO_DATE_RE = re.compile(r'\d{4}-\d{2}-\d{2}')
+PUNCT_RE = re.compile(r'["\'`{}]+')
+WS_RE = re.compile(r'\s+')
+
+
+def _flatten_json_values(obj):
+    out = []
+    if isinstance(obj, dict):
+        for v in obj.values():
+            out.extend(_flatten_json_values(v))
+    elif isinstance(obj, list):
+        for v in obj:
+            out.extend(_flatten_json_values(v))
+    elif isinstance(obj, (str, int, float, bool)):
+        out.append(str(obj))
+    return out
+
+
+def clean_api_reply(raw_text: str) -> str:
+    """
+    يرجع جواب طويل ونظيف:
+    - يحذف date / answer / dev / T_R_X_AI / Don't forget...
+      والروابط / الأوقات / التواريخ / الأقواس
+    - يحافظ على أكثر من جملة (مش قصير)
+    """
+    if not raw_text:
         return ""
 
+    text = raw_text
 
-# ----------------------------------------------------
-# إرسال رسالة لفيسبوك
-# ----------------------------------------------------
-def send_message(recipient_id, text):
-    url = f"https://graph.facebook.com/v19.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
-    payload = {
-        "recipient": {"id": recipient_id},
-        "message": {
-            "text": text,
-            "quick_replies": [
-                {
-                    "content_type": "text",
-                    "title": "المطور",
-                    "payload": "DEV_BTN"
-                }
-            ]
-        }
-    }
-    requests.post(url, json=payload)
-
-
-# ----------------------------------------------------
-# استعلام Vulcan
-# ----------------------------------------------------
-def ask_vulcan(messages):
-    token = get_access_token()
-    if not token:
-        return "لا يمكن الوصول للنظام الآن."
-
-    url = "https://api.vulcanlabs.co/smith-v2/api/v7/chat_android"
-    payload = {
-        "model": "gpt-4o-mini",
-        "user": DEVICE_ID,
-        "messages": messages,
-        "max_tokens": 0
-    }
-    headers = {
-        "User-Agent": "Chat Smith Android",
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "authorization": f"Bearer {token}"
-    }
-
+    # لو الرد JSON → نجمع القيم في نص واحد
     try:
-        resp = requests.post(url, json=payload, headers=headers)
-        data = resp.json()
-        msg = data["choices"][0]["Message"]["content"]
-        msg = msg.replace("T_R_X_AI", "").strip()
-        return msg
-    except:
-        return "حدث خطأ."
+        parsed = json.loads(raw_text)
+        vals = _flatten_json_values(parsed)
+        if vals:
+            text = "\n".join(vals)
+    except Exception:
+        pass
+
+    # ننظف سطر بسطر، ونحتفظ بكل السطور المفيدة
+    lines = (text or "").replace("\r", "").split("\n")
+    cleaned_lines = []
+
+    for line in lines:
+        s = (line or "").strip()
+        if not s:
+            continue
+
+        # تنظيف على مستوى السطر
+        s = LINK_OR_AT_RE.sub("", s)   # روابط و @
+        s = TIME_RE.sub("", s)         # أوقات
+        s = ISO_DATE_RE.sub("", s)     # تواريخ ISO
+        s = PUNCT_RE.sub("", s)        # أقواس واقتباسات
+        s = DISALLOWED_RE.sub("", s)   # date/answer/dev/T_R_X_AI/Don't forget...
+        s = s.replace(":", " ")
+        s = WS_RE.sub(" ", s).strip()
+
+        if len(s) < 3:
+            continue
+
+        cleaned_lines.append(s)
+
+    if not cleaned_lines:
+        # fallback: نظف النص الخام وخذ جزء طويل معقول
+        fallback = PUNCT_RE.sub("", raw_text)
+        fallback = WS_RE.sub(" ", fallback).strip()
+        return fallback[:900]
+
+    # نجمع السطور في فقرة طويلة
+    result = "\n\n".join(cleaned_lines)
+
+    # حد أقصى للطول حتى لا يختنق المسنجر (حوالي 900 حرف)
+    if len(result) > 900:
+        result = result[:900].rstrip()
+
+    return result
 
 
-# ----------------------------------------------------
-# Webhook Handler
-# ----------------------------------------------------
-def handler(request, response):
-    if request.method == "GET":
-        if request.args.get("hub.verify_token") == VERIFY_TOKEN:
-            return response.send(request.args.get("hub.challenge"))
-        return response.send("TOKEN ERROR")
+# ===== Logic =====
+def handle_postback(psid, payload):
+    p = (payload or "").upper()
+    if p in ("GET_STARTED", "START"):
+        # ترحيب بدون أزرار
+        send_text(
+            psid,
+            "👋 مرحبًا! أنا مساعد أيمن — ذكاء فوري بإجابات قوية وطويلة تشرح لك كل شيء ببساطة."
+        )
+        return
 
-    if request.method == "POST":
-        data = request.json
+    # باقي الـ payloads (لو حصلت) → رد عام
+    send_text(psid, FALLBACK_MSG)
 
-        for entry in data.get("entry", []):
-            for event in entry.get("messaging", []):
 
-                if "message" in event:
-                    user_id = event["sender"]["id"]
-                    text = event["message"].get("text", "").strip()
+def handle_message(psid, text):
+    msg = text.strip().lower()
+    msg_norm = msg.replace("؟", "").strip()
 
-                    # زر المطور
-                    if text == "المطور":
-                        send_message(user_id, "حساب مطوري:\nhttps://www.facebook.com/aymen.bourai.2025")
-                        return response.send("ok")
+    # تحيات
+    if "السلام عليكم" in msg or msg.startswith("سلام") or msg == "كيف حالك":
+        send_text(psid, "مرحبا")
+        return
 
-                    # تعريف المطور
-                    if "aymen bourai" in text.lower():
-                        send_message(
-                            user_id,
-                            "نعم، aymen bourai هو مطوري. شاب من مواليد 2007 يحب البرمجة والعزلة وأتمنى له مستقبلاً رائعاً."
-                        )
-                        return response.send("ok")
+    # من أنت؟
+    if any(
+        kw in msg_norm
+        for kw in [
+            "من انت",
+            "مين انت",
+            "من تكون",
+            "who are you",
+            "what are you",
+            "شكون انت",
+            "شكون نت",
+        ]
+    ):
+        send_text(
+            psid,
+            "أنا مساعد ذكاء اصطناعي أردّ مباشرة على أسئلتك بإجابات مفصّلة وواضحة. "
+            "مطوري هو aymen bourai وأنا مطيع له وأبقى مساعدًا له."
+        )
+        return
 
-                    # حفظ المحادثة
-                    if user_id not in user_chats:
-                        user_chats[user_id] = []
+    # مطورك؟
+    if any(kw in msg for kw in ["مطورك", "من مطورك", "من صنعك", "من أنشأك"]):
+        send_text(psid, "aymen bourai هو مطوري وأنا مطيع له وأبقى مساعدًا له.")
+        send_text(psid, DEV_PROFILE_URL)
+        return
 
-                    user_chats[user_id].append({"role": "user", "content": text})
+    # ذكر اسم المطوّر
+    if "aymen bourai" in msg:
+        send_text(
+            psid,
+            "نعم، aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، شاب مبرمج لتطبيقات ومواقع يحب البرمجة "
+            "وأتمنى له مستقبل باهر. من ناحية الدراسة لا أعلم، وهو شخص انطوائي يحب العزلة."
+        )
+        return
 
-                    if len(user_chats[user_id]) > MAX_CHAT_HISTORY:
-                        user_chats[user_id] = user_chats[user_id][-MAX_CHAT_HISTORY:]
+    # الافتراضي: API + تنظيف + بديل ذكي
+    try:
+        r = requests.get(GPT_API, params={"text": text}, timeout=20)
+        reply = clean_api_reply(r.text or "")
+    except Exception as e:
+        reply = f"حدث خطأ أثناء الاتصال بالخدمة: {e}"
 
-                    reply = ask_vulcan(user_chats[user_id])
+    if not reply:
+        reply = FALLBACK_MSG
 
-                    user_chats[user_id].append({"role": "assistant", "content": reply})
+    send_text(psid, reply)
 
-                    send_message(user_id, reply)
 
-        return response.send("ok")
-
-    return response.send("METHOD NOT ALLOWED")
+# Health
+@app.route("/api/healthz")
+def healthz():
+    return jsonify({"ok": True})
