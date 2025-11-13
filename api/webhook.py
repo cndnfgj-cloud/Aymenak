@@ -4,24 +4,33 @@ import os
 import requests
 from urllib.parse import urlparse, parse_qs, quote_plus
 
+# توكن صفحة فيسبوك (تحطه في Vercel Environment Variables)
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN")
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN")
+
+# توكن التأكيد للويب هوك
+# إذا ما وجد في المتغيرات، يستعمل القيمة الافتراضية "boykta 2023"
+VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "boykta 2023")
+
 FB_API_URL = "https://graph.facebook.com/v18.0/me/messages"
 
 
 def generate_reply(user_text: str) -> str:
-    """توليد الرد على رسالة المستخدم."""
+    """
+    توليد الرد على رسالة المستخدم.
+    - ردود خاصة لـ aymen bourai
+    - باقي الرسائل تُرسل للـ API الخارجية
+    """
     if not user_text:
         return "مرحباً، أرسل لي أي سؤال وسأحاول مساعدتك 😊"
 
     text = user_text.strip()
     lower = text.lower()
 
-    # رد خاص: من قام بإنتاجك
+    # رد خاص على سؤال: من قام بإنتاجك
     if "من قام بإنتاجك" in text or "من قام بانتاجك" in text:
         return "aymen bourai هو مطوري وانا مطيع له وابقى مساعداً له."
 
-    # رد خاص: aymen bourai
+    # رد خاص على: aymen bourai
     if "aymen bourai" in lower:
         return (
             "نعم aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، "
@@ -29,7 +38,7 @@ def generate_reply(user_text: str) -> str:
             "وأتمنى له مستقبلاً باهراً 🌟"
         )
 
-    # استدعاء API الخارجية
+    # استدعاء API الخارجية (gpt4.php)
     try:
         url = "https://vetrex.x10.mx/api/gpt4.php?text=" + quote_plus(text)
         resp = requests.get(url, timeout=40)
@@ -43,7 +52,10 @@ def generate_reply(user_text: str) -> str:
 
 
 def send_message(recipient_id: str, message_text: str) -> None:
-    """إرسال رسالة نصية إلى مستخدم ماسنجر (فقط نص، بدون أزرار)."""
+    """
+    إرسال رسالة نصية إلى مستخدم ماسنجر.
+    البوت فقط يجيب نصياً بدون أزرار أو قوالب أو 'اتخاذ إجراء'.
+    """
     if not PAGE_ACCESS_TOKEN:
         # لو نسيت تضيف التوكن في Vercel البوت لن يستطيع الرد
         return
@@ -77,7 +89,10 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode("utf-8"))
 
     def do_GET(self):
-        # تأكيد Webhook من فيسبوك
+        """
+        فيسبوك يستعمل GET أول مرة لتأكيد الـ Webhook:
+        /api/webhook?hub.mode=subscribe&hub.verify_token=...&hub.challenge=...
+        """
         parsed = urlparse(self.path)
         query = parse_qs(parsed.query)
 
@@ -86,9 +101,9 @@ class handler(BaseHTTPRequestHandler):
         challenge = query.get("hub.challenge", [None])[0]
 
         if mode == "subscribe" and token == VERIFY_TOKEN and challenge:
-            # فيسبوك يتوقع أن نطبع الـ challenge كما هو
+            # فيسبوك يتوقع أن نرجع الـ challenge كما هو بنص عادي
             self.send_response(200)
-            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
             self.wfile.write(challenge.encode("utf-8"))
         else:
@@ -97,7 +112,9 @@ class handler(BaseHTTPRequestHandler):
             self.wfile.write(b"Forbidden")
 
     def do_POST(self):
-        # استقبال events من ماسنجر
+        """
+        استقبال الأحداث من ماسنجر (رسائل، Postbacks، إلخ)
+        """
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
 
@@ -113,19 +130,19 @@ class handler(BaseHTTPRequestHandler):
             for event in entry.get("messaging", []):
                 sender_id = event.get("sender", {}).get("id")
 
-                # رسالة نصية عادية
+                # رسالة نصية عادية من المستخدم
                 if "message" in event and "text" in event["message"]:
                     user_text = event["message"]["text"]
                     reply = generate_reply(user_text)
                     if sender_id and reply:
                         send_message(sender_id, reply)
 
-                # Postback مثل زر Get Started → نرسل ترحيب ونخليه يكتب مباشرة
+                # Postback (مثل زر Get Started) → نرسل رسالة ترحيب
                 elif "postback" in event:
                     if sender_id:
                         welcome = (
                             "مرحباً! أنا بوت مبني على API خارجي.\n"
-                            "اسألني أي شيء وسأحاول مساعدتك مباشرة بدون الحاجة للضغط على زر بدء الاستخدام 🤖"
+                            "اسألني أي سؤال وسأحاول مساعدتك مباشرة 🤖"
                         )
                         send_message(sender_id, welcome)
 
