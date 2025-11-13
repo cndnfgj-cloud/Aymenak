@@ -10,21 +10,18 @@ FB_API_URL = "https://graph.facebook.com/v18.0/me/messages"
 
 
 def generate_reply(user_text: str) -> str:
-    """
-    توليد الرد على رسالة المستخدم.
-    هنا نضيف الردود الخاصة و إلا نستدعي API الخارجية.
-    """
+    """توليد الرد على رسالة المستخدم."""
     if not user_text:
         return "مرحباً، أرسل لي أي سؤال وسأحاول مساعدتك 😊"
 
     text = user_text.strip()
     lower = text.lower()
 
-    # رد خاص على سؤال: من قام بإنتاجك
+    # رد خاص: من قام بإنتاجك
     if "من قام بإنتاجك" in text or "من قام بانتاجك" in text:
         return "aymen bourai هو مطوري وانا مطيع له وابقى مساعداً له."
 
-    # رد خاص على: aymen bourai
+    # رد خاص: aymen bourai
     if "aymen bourai" in lower:
         return (
             "نعم aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، "
@@ -46,10 +43,7 @@ def generate_reply(user_text: str) -> str:
 
 
 def send_message(recipient_id: str, message_text: str) -> None:
-    """
-    إرسال رسالة نصية إلى مستخدم ماسنجر.
-    البوت فقط يجيب نصياً بدون أزرار أو قوالب.
-    """
+    """إرسال رسالة نصية إلى مستخدم ماسنجر (فقط نص، بدون أزرار)."""
     if not PAGE_ACCESS_TOKEN:
         # لو نسيت تضيف التوكن في Vercel البوت لن يستطيع الرد
         return
@@ -119,14 +113,14 @@ class handler(BaseHTTPRequestHandler):
             for event in entry.get("messaging", []):
                 sender_id = event.get("sender", {}).get("id")
 
-                # لو كانت رسالة نصية عادية
+                # رسالة نصية عادية
                 if "message" in event and "text" in event["message"]:
                     user_text = event["message"]["text"]
                     reply = generate_reply(user_text)
                     if sender_id and reply:
                         send_message(sender_id, reply)
 
-                # لو كان Postback (مثل زر Get Started) نتعامل معه كرسالة ترحيب
+                # Postback مثل زر Get Started → نرسل ترحيب ونخليه يكتب مباشرة
                 elif "postback" in event:
                     if sender_id:
                         welcome = (
