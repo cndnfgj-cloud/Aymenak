@@ -1,201 +1,230 @@
 import os
-import re
 import json
+import random
 import requests
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# ======== CONFIG ========
+# ===== إعدادات أساسية =====
 PAGE_ACCESS_TOKEN = os.getenv("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "boykta 2023")
 GRAPH_URL = "https://graph.facebook.com/v17.0/me/messages"
 
-SESSION_MODE = {}   # 1 = AI , 2 = IMAGE
+CLAILA_URL = "https://app.claila.com/api/v2/unichat2"
 
-# ======== FACEBOOK SEND ========
+# ===== إرسال لواجهة فيسبوك =====
 def fb_send(payload):
     try:
-        requests.post(
+        r = requests.post(
             GRAPH_URL,
             params={"access_token": PAGE_ACCESS_TOKEN},
             json=payload,
-            timeout=15
+            timeout=20,
         )
+        print("FB_SEND:", r.status_code, r.text[:200])
     except Exception as e:
-        print("Send Error:", e)
+        print("⚠️ send error:", e)
 
 
 def send_text(psid, text):
     fb_send({"recipient": {"id": psid}, "message": {"text": text}})
 
 
-# ======== AI MODE (DeepSeek Chat) ========
-def deepseek_get_nonce():
-    try:
-        r = requests.get("https://chat-deep.ai/", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        if r.status_code != 200:
-            return None
-        patterns = [
-            r'"nonce":"([a-f0-9]+)"',
-            r'nonce["\']?\s*:\s*["\']([a-f0-9]+)["\']'
-        ]
-        for pat in patterns:
-            m = re.search(pat, r.text)
-            if m:
-                return m.group(1)
-        return None
-    except:
-        return None
-
-
-def deepseek_reply(msg):
-    nonce = deepseek_get_nonce()
-    if not nonce:
-        return "تعذر الحصول على رد الآن."
-
-    url = "https://chat-deep.ai/wp-admin/admin-ajax.php"
+def send_quick(psid):
+    """أزرار بسيطة تظهر بعد كل رد."""
     payload = {
-        "action": "deepseek_chat",
-        "message": msg,
-        "model": "deepseek-chat",
-        "nonce": nonce,
-        "save_conversation": "0",
-        "session_only": "1"
+        "recipient": {"id": psid},
+        "message": {
+            "text": "يمكنك المتابعة أو اختيار أحد الخيارات:",
+            "quick_replies": [
+                {
+                    "content_type": "text",
+                    "title": "👨‍💻 من مطوّرك؟",
+                    "payload": "DEV_INFO",
+                },
+                {
+                    "content_type": "text",
+                    "title": "ℹ ما هو هذا البوت؟",
+                    "payload": "ABOUT_BOT",
+                },
+            ],
+        },
     }
+    fb_send(payload)
+
+# ===== استدعاء API claila =====
+def call_claila(prompt: str) -> str:
+    """يرسل السؤال إلى claila ويرجع نص الجواب فقط."""
+    session_id = "".join(random.choice("0123456789") for _ in range(10))
+
+    payload = {
+        "model": "gpt-4.1-mini",
+        "calltype": "completion",
+        "message": str(prompt),
+        "sessionId": session_id,
+        "chat_mode": "chat",
+        "websearch": "false",
+    }
+
     headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Origin": "https://chat-deep.ai",
-        "Referer": "https://chat-deep.ai/",
-        "Content-Type": "application/x-www-form-urlencoded"
+        # بدل user_agent الديناميكي نستخدم UA ثابت بسيط
+        "User-Agent": "Mozilla/5.0 (Linux; Android 10; ChatBot Aymen)",
+        "sec-ch-ua-platform": "\"Android\"",
+        "sec-ch-ua": "\"Google Chrome\";v=\"141\", \"Not?A_Brand\";v=\"8\", \"Chromium\";v=\"141\"",
+        "sec-ch-ua-mobile": "?1",
+        "x-requested-with": "XMLHttpRequest",
+        "origin": "https://app.claila.com",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
+        "referer": "https://app.claila.com/chat?uid=3887ac09&lang=ar",
+        "accept-language": "ar-IQ,ar;q=0.9",
+        "priority": "u=1, i",
     }
 
     try:
-        r = requests.post(url, data=payload, headers=headers, timeout=25)
-        j = r.json()
-        if j.get("success"):
-            resp = j["data"]["response"]
-            return clean_reply(resp)
-        return "لم أفهم، أعد صياغة سؤالك."
-    except:
+        r = requests.post(CLAILA_URL, data=payload, headers=headers, timeout=30)
+        raw = r.text
+        print("CLAILA_RAW:", raw[:300])
+
+        # نحاول نفهمه على أنه JSON ونستخرج answer فقط
+        try:
+            j = r.json()
+            # لو فيه مفتاح "answer" خذه فقط (بدون date/dev…)
+            if isinstance(j, dict):
+                if "answer" in j and isinstance(j["answer"], str):
+                    return j["answer"].strip()
+                # لو ما فيه answer نجمع القيم النصية
+                parts = []
+                for v in j.values():
+                    if isinstance(v, str):
+                        parts.append(v)
+                if parts:
+                    return "\n".join(parts).strip()
+        except Exception:
+            pass
+
+        # لو مو JSON نرجع النص كما هو
+        return raw.strip() or "لم أستطع فهم الرد حالياً."
+    except Exception as e:
+        print("CLAILA_ERROR:", e)
         return "حدث خطأ أثناء الاتصال بالخدمة."
 
 
-# ======== IMAGE MODE ========
-def generate_image(text):
-    try:
-        url = f"https://sii3.top/api/imagen-3.php?text={text}&aspect_ratio=1:1&style=Auto"
-        r = requests.get(url, timeout=20).json()
-        return r["image"]
-    except:
-        return None
-
-
-# ======== CLEANING ========
-BAD = re.compile(
-    r"(date|answer|dev|dont\s*forget|support\s*the\s*channel)", re.I
-)
-WS = re.compile(r"\s+")
-
-
-def clean_reply(text):
-    text = BAD.sub("", text)
-    text = re.sub(r"http\S+|www\S+|@\S+", "", text)
-    text = text.replace("{", "").replace("}", "").replace(":", " ")
-    text = WS.sub(" ", text).strip()
-    return text
-
-
-# ======== WEBHOOK VERIFY ========
+# ===== Webhook Verify (GET) =====
 @app.route("/api/webhook", methods=["GET"])
 def verify():
     mode = request.args.get("hub.mode")
     token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
+
     if mode == "subscribe" and token == VERIFY_TOKEN:
         return challenge, 200
-    return "Verification failed", 403
+    return "خطأ في التحقق", 403
 
 
-# ======== MAIN WEBHOOK ========
+# ===== Webhook Messages (POST) =====
 @app.route("/api/webhook", methods=["POST"])
 def webhook():
     data = request.get_json(silent=True) or {}
-
     if data.get("object") != "page":
         return jsonify({"status": "ignored"}), 200
 
     for entry in data.get("entry", []):
         for event in entry.get("messaging", []):
-
             psid = event.get("sender", {}).get("id")
             if not psid:
                 continue
 
-            # ===== START BUTTON =====
+            # ===== Postbacks (مثل GET_STARTED) =====
             if "postback" in event:
-                payload = event["postback"].get("payload", "")
-                if payload == "GET_STARTED":
-                    send_text(psid, "مرحباً! اختر وضع التشغيل:\n1- ذكاء اصطناعي\n2- إنشاء صور")
-                    return "ok", 200
+                handle_postback(psid, event["postback"].get("payload", ""))
+                continue
 
-            # ===== USER MESSAGE =====
-            if "message" in event and "text" in event["message"]:
-                msg = event["message"]["text"].strip()
+            # ===== Messages =====
+            if "message" in event:
+                msg_obj = event["message"]
 
-                # اختيار وضع التشغيل
-                if msg == "1":
-                    SESSION_MODE[psid] = 1
-                    send_text(psid, "تم تفعيل وضع الذكاء الاصطناعي 🤖.\nاسألني ما تريد!")
-                    return "ok", 200
+                # Quick reply
+                qr = (msg_obj.get("quick_reply") or {}).get("payload")
+                if qr:
+                    handle_postback(psid, qr)
+                    continue
 
-                if msg == "2":
-                    SESSION_MODE[psid] = 2
-                    send_text(psid, "تم تفعيل وضع إنشاء الصور 🖼️.\nارسل وصف الصورة الآن.")
-                    return "ok", 200
-
-                # مطورك؟
-                if "مطورك" in msg or "من صنعك" in msg or "من انشاك" in msg:
-                    send_text(psid, "مطوري هو aymen bourai، وأنا مساعده المطيع 🤝.")
-                    return "ok", 200
-
-                if "aymen bourai" in msg.lower():
-                    send_text(psid, "نعم، aymen bourai هو مطوري. شاب موهوب من 2007 ويحب البرمجة ❤️.")
-                    return "ok", 200
-
-                # لم يحدد الوضع
-                if psid not in SESSION_MODE:
-                    send_text(psid, "اختر الوضع:\n1- ذكاء اصطناعي\n2- إنشاء صور")
-                    return "ok", 200
-
-                mode = SESSION_MODE[psid]
-
-                # ===== AI MODE =====
-                if mode == 1:
-                    reply = deepseek_reply(msg)
-                    send_text(psid, reply)
-                    return "ok", 200
-
-                # ===== IMAGE MODE =====
-                if mode == 2:
-                    image = generate_image(msg)
-                    if image:
-                        fb_send({
-                            "recipient": {"id": psid},
-                            "message": {
-                                "attachment": {
-                                    "type": "image",
-                                    "payload": {"url": image}
-                                }
-                            }
-                        })
-                    else:
-                        send_text(psid, "تعذر إنشاء الصورة.")
-                    return "ok", 200
+                # نص عادي
+                if "text" in msg_obj:
+                    handle_message(psid, msg_obj["text"])
+                else:
+                    send_text(psid, "أرسل نصًا فقط 💬")
+                    send_quick(psid)
 
     return jsonify({"status": "ok"}), 200
 
 
+# ===== منطق البوستباك / الأزرار =====
+def handle_postback(psid, payload: str):
+    p = (payload or "").upper()
+
+    if p in ("GET_STARTED", "START"):
+        send_text(
+            psid,
+            "👋 مرحبًا! أنا بوت ذكاء اصطناعي أجيبك مباشرة على أي سؤال.\n"
+            "فقط أرسل سؤالك بالعربية أو الإنجليزية."
+        )
+        send_quick(psid)
+        return
+
+    if p == "DEV_INFO":
+        send_text(psid, "مطوري هو aymen bourai، وأنا مطيع له وأبقى مساعدًا له 🤝.")
+        send_text(psid, "حساب المطوّر على فيسبوك:\nhttps://www.facebook.com/aymen.bourai.2025")
+        return
+
+    if p == "ABOUT_BOT":
+        send_text(
+            psid,
+            "أنا بوت ذكاء اصطناعي مبني على واجهة claila، تم تطويري وبرمجتي باحترافية بواسطة المبرمج الشاب aymen bourai."
+        )
+        return
+
+    # افتراضي لأي payload آخر
+    send_text(psid, "أنا هنا لمساعدتك — أرسل سؤالك مباشرة 👌")
+
+
+# ===== منطق الرسائل =====
+def handle_message(psid, text: str):
+    msg = (text or "").strip()
+    low = msg.lower()
+
+    # تحية بسيطة
+    if "سلام" in msg or "السلام عليكم" in msg:
+        send_text(psid, "وعليكم السلام ورحمة الله وبركاته 🌿")
+        send_quick(psid)
+        return
+
+    # سؤال عن المطور
+    if any(kw in msg for kw in ["مطورك", "من مطورك", "من صنعك", "من أنشأك", "من انشاك"]):
+        send_text(psid, "مطوري هو aymen bourai، وأنا مطيع له وأبقى مساعدًا له 🤝.")
+        send_text(psid, "حساب المطوّر على فيسبوك:\nhttps://www.facebook.com/aymen.bourai.2025")
+        return
+
+    # ذكر اسم المطوّر صراحة
+    if "aymen bourai" in low:
+        send_text(
+            psid,
+            "نعم، aymen bourai هو مطوري، عمره 18 سنة من مواليد 2007، "
+            "شاب مبرمج لتطبيقات ومواقع يحب البرمجة وأتمنى له مستقبل باهر. "
+            "من ناحية الدراسة لا أعلم عن هذا الأمر، لكنه شخص انطوائي يحب العزلة."
+        )
+        return
+
+    # الافتراضي: نرسل السؤال إلى API ونرجّع الجواب
+    answer = call_claila(msg)
+    send_text(psid, answer)
+    send_quick(psid)
+
+
+# ===== Health Check =====
 @app.route("/api/healthz")
-def health():
+def healthz():
     return jsonify({"ok": True})
