@@ -222,10 +222,8 @@ def webhook():
 
                 user_chats[sender_psid].append({"role": "user", "content": text})
                 # قص المحادثة لو زاد الحد
-                if len(user_chats[sender_psid]) > MAX_CHAT_HISTORY * 2:
-                    user_chats[sender_psid"] = user_chats[sender_psid][-MAX_CHAT_HISTORY*2:]
-
-                # أرسل مؤشر كتابة (اختياري) عبر API (typing_on)
+               if len(user_chats[sender_psid]) > MAX_CHAT_HISTORY * 2:
+               user_chats[sender_psid] = user_chats[sender_psid][-MAX_CHAT_HISTORY*2:]                # أرسل مؤشر كتابة (اختياري) عبر API (typing_on)
                 try:
                     typing_payload = {
                         "recipient": {"id": sender_psid},
