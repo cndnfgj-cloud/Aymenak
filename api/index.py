@@ -76,12 +76,12 @@ def webhook():
 
                 # استعلام API الخارجي
                 try:
-                    response = requests.get(
+                    r = requests.get(
                         f"https://ahmaedinfo.serv00.net/DeepSeek.php?message={text}&api_key=ahmaedinfo",
                         timeout=15
                     )
-                    # استخراج الجواب النصي فقط
-                    reply = response.text.strip()
+                    data = r.json()  # تحويل الاستجابة إلى JSON
+                    reply = data.get("response", "عذراً، لم يتم تلقي رد من الخادم.").strip()
                 except Exception:
                     reply = "عذراً، حدث خطأ أثناء الاتصال بالخادم."
 
