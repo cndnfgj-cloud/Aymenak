@@ -74,14 +74,14 @@ def webhook():
                     send_message(sender_psid, DEVELOPER_TEXT)
                     continue
 
-                # استعلام API الخارجي
+                # استعلام API الخارجي الجديد
                 try:
-                    r = requests.get(
-                        f"https://ahmaedinfo.serv00.net/DeepSeek.php?message={text}&api_key=ahmaedinfo",
+                    response = requests.get(
+                        f"https://vetrex.x10.mx/api/gpt4.php?text={text}&prompt=انا_مطورك_اسمي_ديفل",
                         timeout=15
                     )
-                    data = r.json()  # تحويل الاستجابة إلى JSON
-                    reply = data.get("response", "عذراً، لم يتم تلقي رد من الخادم.").strip()
+                    data = response.json()  # تحويل الاستجابة إلى JSON
+                    reply = data.get("answer", "عذراً، لم يتم تلقي رد من الخادم.").strip()
                 except Exception:
                     reply = "عذراً، حدث خطأ أثناء الاتصال بالخادم."
 
