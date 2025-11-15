@@ -24,7 +24,12 @@ def send_message(psid, text, quick_replies=None):
     if quick_replies:
         payload["message"]["quick_replies"] = quick_replies
     try:
-        r = requests.post(GRAPH_API_URL, params={"access_token": PAGE_ACCESS_TOKEN}, json=payload, timeout=10)
+        r = requests.post(
+            GRAPH_API_URL,
+            params={"access_token": PAGE_ACCESS_TOKEN},
+            json=payload,
+            timeout=10
+        )
         return r.status_code, r.text
     except Exception as e:
         print("Send message error:", e)
@@ -74,9 +79,12 @@ def webhook():
                     send_message(sender_psid, DEVELOPER_TEXT)
                     continue
 
-                # استعلام API الخارجي
+                # استعلام API الخارجي الجديد
                 try:
-                    response = requests.get(f"https://ai-api.yzz.me/DeepSeek-R1.php?text={text}", timeout=15)
+                    response = requests.get(
+                        f"https://ahmaedinfo.serv00.net/DeepSeek.php?message={text}&api_key=ahmaedinfo",
+                        timeout=15
+                    )
                     reply = response.text
                 except Exception:
                     reply = "عذراً، حدث خطأ أثناء الاتصال بالخادم."
