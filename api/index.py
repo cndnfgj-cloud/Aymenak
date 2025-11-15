@@ -4,7 +4,7 @@ import requests
 
 app = Flask(__name__)
 
-# متغيرات البيئة على Vercel
+# متغيرات البيئة
 PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN", "")
 VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "boykta2023")
 
@@ -19,21 +19,17 @@ DEVELOPER_TEXT = "من قام بإنتاجي يقول aymen bourai هو مطور
 GRAPH_API_URL = "https://graph.facebook.com/v16.0/me/messages"
 
 # دالة إرسال الرسائل
-def send_message(psid, text, quick_replies=None):
+def send_message(psid, text):
     payload = {"recipient": {"id": psid}, "message": {"text": text}}
-    if quick_replies:
-        payload["message"]["quick_replies"] = quick_replies
     try:
-        r = requests.post(
+        requests.post(
             GRAPH_API_URL,
             params={"access_token": PAGE_ACCESS_TOKEN},
             json=payload,
             timeout=10
         )
-        return r.status_code, r.text
     except Exception as e:
         print("Send message error:", e)
-        return None, str(e)
 
 # Webhook verification
 @app.route("/api/webhook", methods=["GET"])
@@ -67,8 +63,7 @@ def webhook():
 
             # الردود على النصوص
             if messaging.get("message"):
-                message = messaging["message"]
-                text = message.get("text", "").strip()
+                text = messaging["message"].get("text", "").strip()
                 lowered = text.lower()
 
                 # ردود خاصة
@@ -79,22 +74,18 @@ def webhook():
                     send_message(sender_psid, DEVELOPER_TEXT)
                     continue
 
-                # استعلام API الخارجي الجديد
+                # استعلام API الخارجي
                 try:
                     response = requests.get(
                         f"https://ahmaedinfo.serv00.net/DeepSeek.php?message={text}&api_key=ahmaedinfo",
                         timeout=15
                     )
-                    reply = response.text
+                    # استخراج الجواب النصي فقط
+                    reply = response.text.strip()
                 except Exception:
                     reply = "عذراً، حدث خطأ أثناء الاتصال بالخادم."
 
-                # أزرار سريعة
-                quick = [
-                    {"content_type": "text", "title": "سؤال آخر", "payload": "ASK_MORE"},
-                    {"content_type": "text", "title": "معلومات عن المطور", "payload": "DEV_PAYLOAD"}
-                ]
-                send_message(sender_psid, reply, quick_replies=quick)
+                send_message(sender_psid, reply)
 
     return "EVENT_RECEIVED", 200
 
