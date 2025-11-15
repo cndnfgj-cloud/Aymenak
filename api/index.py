@@ -14,7 +14,7 @@ AYMEN_PROFILE_TEXT = (
     "شخص شاب مبرمج لتطبيقات ومواقع يحب البرمجة واتمنى له مستقبل باهر "
     "من ناحية الدراسة لاأعلم عن هذا امر لكنه شخص انطوائي يحب العزلة."
 )
-DEVELOPER_TEXT = "من قام بإنتاجي يقول aymen bourai هو مطوري وانا مطيع له وابقا مساعد له."
+DEVELOPER_TEXT = "aymen bourai هو مطوري وانا مطيع له وابقا مساعد له."
 
 GRAPH_API_URL = "https://graph.facebook.com/v16.0/me/messages"
 
@@ -61,29 +61,32 @@ def webhook():
                     send_message(sender_psid, "أهلاً! أرسل لي أي رسالة وسأرد عليك مباشرة.")
                     continue
 
-            # الردود على النصوص
+            # الرد على الرسائل النصية
             if messaging.get("message"):
                 text = messaging["message"].get("text", "").strip()
                 lowered = text.lower()
 
-                # ردود خاصة
-                if "aymen bourai" in lowered or "aymen" in lowered:
-                    send_message(sender_psid, AYMEN_PROFILE_TEXT)
-                    continue
-                if "من قام بإنتاجك" in text or "من قام بإنتاجي" in text:
-                    send_message(sender_psid, DEVELOPER_TEXT)
+                # ردود خاصة على المطور
+                special_keywords = ["aymen bourai", "aymen", 
+                                    "من قام بإنتاجك", "من مطورك", "من أسسك",
+                                    "من مصممك", "من صنعك"]
+                if any(word in lowered for word in special_keywords):
+                    if "aymen bourai" in lowered or "aymen" in lowered:
+                        send_message(sender_psid, AYMEN_PROFILE_TEXT)
+                    else:
+                        send_message(sender_psid, DEVELOPER_TEXT)
                     continue
 
-                # استعلام API الخارجي الجديد
+                # استعلام API الخارجي
                 try:
-                    response = requests.get(
-                        f"https://vetrex.x10.mx/api/gpt4.php?text={text}&prompt=انا_مطورك_اسمي_ديفل",
-                        timeout=15
+                    r = requests.get(
+                        f"https://vetrex.x10.mx/api/gpt4.php?text={text}",
+                        timeout=10
                     )
-                    data = response.json()  # تحويل الاستجابة إلى JSON
+                    data = r.json()  # تحويل الاستجابة إلى JSON
                     reply = data.get("answer", "عذراً، لم يتم تلقي رد من الخادم.").strip()
                 except Exception:
-                    reply = "عذراً، حدث خطأ أثناء الاتصال بالخادم."
+                    reply = "عذراً، الخدمة غير متاحة حالياً."
 
                 send_message(sender_psid, reply)
 
