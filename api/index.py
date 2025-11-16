@@ -4,6 +4,7 @@ import os
 import requests
 import html
 import time
+import threading
 
 app = Flask(__name__)
 
@@ -25,13 +26,15 @@ AYMEN_PROFILE_TEXT = (
 DEVELOPER_TEXT = "aymen bourai هو مطوري وانا مطيع له وابقا مساعد له."
 
 GRAPH_API_URL = "https://graph.facebook.com/v17.0/me/messages"
+PROFILE_API_URL = "https://graph.facebook.com/v17.0/me/messenger_profile"
 
 # حالة مؤقتة للمستخدمين ينتظرون Prompt للفيديو
 # صيغة: { psid: {"waiting_for_video": True, "since": timestamp} }
 awaiting_video_prompt = {}
 
-# helpers
+# --- Helpers
 def send_message(psid, text):
+    """إرسال رسالة نصية للمستخدم (نص فقط)."""
     if not PAGE_ACCESS_TOKEN:
         print("ERROR: PAGE_ACCESS_TOKEN not set")
         return
@@ -44,6 +47,7 @@ def send_message(psid, text):
         print("Send message exception:", e)
 
 def send_button_template(psid, text, buttons):
+    """إرسال قالب زرّ (button template)."""
     if not PAGE_ACCESS_TOKEN:
         print("ERROR: PAGE_ACCESS_TOKEN not set")
         return
@@ -74,6 +78,43 @@ def cleanup_awaiting_states(timeout_seconds=300):
     for psid in to_remove:
         awaiting_video_prompt.pop(psid, None)
 
+# --- إعداد ملف الماسنجر (Get Started + Persistent Menu)
+def set_messenger_profile():
+    """يحاول تهيئة Get Started و Persistent Menu على صفحة الفيسبوك."""
+    if not PAGE_ACCESS_TOKEN:
+        print("Cannot set messenger profile: PAGE_ACCESS_TOKEN missing.")
+        return
+    payload = {
+        "get_started": {"payload": "GET_STARTED_PAYLOAD"},
+        "persistent_menu": [
+            {
+                "locale": "default",
+                "composer_input_disabled": False,
+                "call_to_actions": [
+                    {"type": "postback", "title": "إنشاء فيديو", "payload": "CREATE_VIDEO_PAYLOAD"},
+                    {"type": "postback", "title": "اسأل نصاً", "payload": "ASK_TEXT_PAYLOAD"},
+                    {"type": "postback", "title": "معلومات", "payload": "INFO_PAYLOAD"}
+                ]
+            }
+        ]
+    }
+    try:
+        r = requests.post(PROFILE_API_URL, params={"access_token": PAGE_ACCESS_TOKEN}, json=payload, timeout=10)
+        print("set_messenger_profile:", r.status_code, r.text)
+    except Exception as e:
+        print("set_messenger_profile exception:", e)
+
+# نطلق الدالة في Thread عند بدء التطبيق (مرة واحدة)
+def start_profile_setup_thread():
+    try:
+        t = threading.Thread(target=set_messenger_profile, daemon=True)
+        t.start()
+    except Exception as e:
+        print("Could not start profile setup thread:", e)
+
+start_profile_setup_thread()
+
+# --- Webhook endpoints
 @app.route("/api/webhook", methods=["GET"])
 def verify():
     mode = request.args.get("hub.mode")
@@ -96,6 +137,13 @@ def webhook():
 
     for entry in data.get("entry", []):
         for messaging in entry.get("messaging", []):
+            # تجنب الرد على أحداث ليست من المستخدم أو ردود البوت نفسه
+            message_obj = messaging.get("message", {})
+            # إذا هذه حدث echo من بوتنا نفسه، تجاهله
+            if message_obj and message_obj.get("is_echo"):
+                # تجاهل رسائل الـ echo
+                continue
+
             sender = messaging.get("sender", {}).get("id")
             if not sender:
                 continue
@@ -111,23 +159,25 @@ def webhook():
                     send_button_template(sender, "أهلاً! اختر ما تريد أو أرسل نصاً:", buttons)
                     continue
                 if payload == "CREATE_VIDEO_PAYLOAD":
-                    # ضع المستخدم في وضع انتظار prompt الفيديو
                     awaiting_video_prompt[sender] = {"waiting_for_video": True, "since": time.time()}
                     send_message(sender, "ممتاز — ما هو موضوع الفيديو أو الوصف الذي تريده؟ أرسل سطرًا واحدًا لوصف الـ prompt.")
                     continue
                 if payload == "ASK_TEXT_PAYLOAD":
                     send_message(sender, "أرسل النص الذي تريدني أن أجيبه.")
                     continue
+                if payload == "INFO_PAYLOAD":
+                    send_message(sender, "أنا بوت رد آلي. أرسل نصاً وسأجيبك بنص واضح.")
+                    continue
 
             # message handling
-            message = messaging.get("message", {})
+            message = message_obj  # already fetched
 
             # attachments (صور/ميديا)
             if message.get("attachments"):
                 send_message(sender, "✨ تم استلام المرفق. أرسل نصاً إن أردت ردًا نصيًّا.")
                 continue
 
-            # reaction (إن وُجد)
+            # reaction (إن وُجد) — ملاحظة: تحتاج الاشتراك في messaging_reactions
             if messaging.get("reaction"):
                 send_message(sender, "👋 أهلاً! كيف أساعدك اليوم؟")
                 continue
@@ -149,8 +199,6 @@ def webhook():
 
                 # هل المستخدم في وضع انتظار prompt للفيديو؟
                 if awaiting_video_prompt.get(sender, {}).get("waiting_for_video"):
-                    # استعمل النص الذي أرسله المستخدم كـ prompt إلى SORA API
-                    # ثم أزل حالة الانتظار
                     awaiting_video_prompt.pop(sender, None)
                     send_message(sender, "جارٍ طلب إنشاء الفيديو... سأرسل الرد فورًا.")
                     try:
@@ -161,8 +209,7 @@ def webhook():
                         except Exception:
                             j = None
 
-                        # نحاول استخراج أفضل حقل للعرض ثم نعيده كنص
-                        video_resp = ""
+                        video_text = ""
                         if isinstance(j, dict):
                             video_resp = j.get("result") or j.get("response") or j.get("answer") or j.get("data") or ""
                             if isinstance(video_resp, (list, dict)):
