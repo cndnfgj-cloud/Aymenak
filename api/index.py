@@ -1,101 +1,94 @@
 from flask import Flask, request, jsonify
-import os
 import requests
+import json
 
 app = Flask(__name__)
 
-# متغيرات البيئة
-PAGE_ACCESS_TOKEN = os.environ.get("PAGE_ACCESS_TOKEN", "")
-VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "boykta2023")
+VERIFY_TOKEN = "boykta_2023"
+PAGE_ACCESS_TOKEN = "PUT_YOUR_PAGE_ACCESS_TOKEN_HERE"
 
-# نصوص خاصة بالمطور
-AYMEN_PROFILE_TEXT = (
-    "نعم aymen bourai هو مطوري عمره 18 سنة من مواليد 2007 "
-    "شخص شاب مبرمج لتطبيقات ومواقع يحب البرمجة واتمنى له مستقبل باهر "
-    "من ناحية الدراسة لاأعلم عن هذا امر لكنه شخص انطوائي يحب العزلة."
-)
-DEVELOPER_TEXT = "aymen bourai هو مطوري وانا مطيع له وابقا مساعد له."
+API_URL = "https://vetrex.x10.mx/api/gpt4.php?text="
 
-GRAPH_API_URL = "https://graph.facebook.com/v16.0/me/messages"
 
-# دالة إرسال الرسائل
 def send_message(psid, text):
-    payload = {"recipient": {"id": psid}, "message": {"text": text}}
-    try:
-        requests.post(
-            GRAPH_API_URL,
-            params={"access_token": PAGE_ACCESS_TOKEN},
-            json=payload,
-            timeout=10
-        )
-    except Exception as e:
-        print("Send message error:", e)
+    url = f"https://graph.facebook.com/v17.0/me/messages?access_token={PAGE_ACCESS_TOKEN}"
+    payload = {
+        "recipient": {"id": psid},
+        "message": {"text": text}
+    }
+    requests.post(url, json=payload)
 
-# Webhook verification
-@app.route("/api/webhook", methods=["GET"])
+
+@app.route("/webhook", methods=["GET"])
 def verify():
     mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
+    token = request.args.get("hub.verify_token")
+
     if mode == "subscribe" and token == VERIFY_TOKEN:
         return challenge, 200
+
     return "Verification token mismatch", 403
 
-# Webhook للرسائل
-@app.route("/api/webhook", methods=["POST"])
+
+@app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    if data is None:
-        return "No payload", 400
 
-    for entry in data.get("entry", []):
-        for messaging in entry.get("messaging", []):
-            sender_psid = messaging.get("sender", {}).get("id")
-            if not sender_psid:
-                continue
+    if data["object"] == "page":
+        for entry in data["entry"]:
+            for messaging in entry.get("messaging", []):
 
-            # الرد على زر Get Started أو أي postback
-            if messaging.get("postback"):
-                payload = messaging["postback"].get("payload")
-                if payload == "GET_STARTED_PAYLOAD":
-                    send_message(sender_psid, "أهلاً! أرسل لي أي رسالة وسأرد عليك مباشرة.")
+                sender = messaging["sender"]["id"]
+
+                # 1 — رد عند إرسال صورة
+                if "attachments" in messaging.get("message", {}):
+                    send_message(sender, "✨ انا اسف لا أعدم رؤية صور او انشاء صور المطور aymen يعمل على هذت مشكل وسيتم حل مشكلة قريبا")
                     continue
 
-            # الرد على الرسائل النصية
-            if messaging.get("message"):
-                text = messaging["message"].get("text", "").strip()
-                lowered = text.lower()
-
-                # ردود خاصة على المطور
-                special_keywords = ["aymen bourai", "aymen", 
-                                    "من قام بإنتاجك", "من مطورك", "من أسسك",
-                                    "من مصممك", "من صنعك"]
-                if any(word in lowered for word in special_keywords):
-                    if "aymen bourai" in lowered or "aymen" in lowered:
-                        send_message(sender_psid, AYMEN_PROFILE_TEXT)
-                    else:
-                        send_message(sender_psid, DEVELOPER_TEXT)
+                # 2 — رد عند إرسال زر إعجاب 👍 (reaction)
+                if "reaction" in messaging:
+                    send_message(sender, "👋 أهلاً! يمكنك سؤالي أي شيء وأنا جاهز دائماً.")
                     continue
 
-                # استعلام API الخارجي
-                try:
-                    r = requests.get(
-                        f"https://vetrex.x10.mx/api/gpt4.php?text={text}",
-                        timeout=10
+                # 3 — نص المستخدم
+                if "text" not in messaging["message"]:
+                    continue
+
+                text = messaging["message"]["text"].strip().lower()
+
+                # ردود خاصة عن مطورك
+                if any(kw in text for kw in ["من قام بإنتاجك", "من مطورك", "من انتجك", "من صنعك", "من أسسك", "من مصممك"]):
+                    send_message(sender, "❤️ aymen bourai هو مطوري، وأنا مطيع له دائماً وباقٍ كمساعد له.")
+                    continue
+
+                # معلومات إضافية عن أيمن
+                if "aymen bourai" in text or "aymen" in text:
+                    send_message(sender,
+                        "نعم، aymen bourai هو مطوري.\n"
+                        "عمره 18 سنة من مواليد 2007.\n"
+                        "مبرمج مواقع وتطبيقات، يحب البرمجة كثيراً.\n"
+                        "أتمنى له مستقبلاً رائعاً.\n"
+                        "من ناحية الدراسة لا أعلم، لكنه شخص انطوائي ويحب العزلة."
                     )
-                    data = r.json()  # تحويل الاستجابة إلى JSON
-                    reply = data.get("answer", "عذراً، لم يتم تلقي رد من الخادم.").strip()
-                except Exception:
-                    reply = "عذراً، الخدمة غير متاحة حالياً."
+                    continue
 
-                send_message(sender_psid, reply)
+                # طلب من API — رد نصي فقط
+                try:
+                    r = requests.get(API_URL + text, timeout=10)
+                    j = r.json()
+
+                    # استخراج answer فقط
+                    answer = j.get("answer", "لم أستطع فهم الإجابة من الخادم.")
+
+                except Exception:
+                    answer = "⚠ حدث خطأ أثناء الاتصال بالخادم."
+
+                send_message(sender, answer)
 
     return "EVENT_RECEIVED", 200
 
-# Endpoint صحيّة للتأكد من عمل السيرفر
-@app.route("/api/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"}), 200
 
-if __name__ == "__main__":
-    app.run(debug=True, port=3000)
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"status": "bot running"}), 200
